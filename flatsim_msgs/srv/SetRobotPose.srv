@@ -1,0 +1,7 @@
+string name
+float64 x     # m
+float64 y
+float64 z     # floor height the robot stands on, m
+float64 yaw   # rad
+---
+bool success  # false for an unknown robot

@@ -1,0 +1,5 @@
+bool pause         # paused state after the call
+uint32 multi_step  # physics steps to take first, needs pause
+---
+bool success
+builtin_interfaces/Time time  # sim time after the call

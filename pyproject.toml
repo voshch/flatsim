@@ -1,0 +1,18 @@
+[project]
+name = "flatsim-workspace"
+version = "0.0.0"
+requires-python = "==3.12.*"
+dependencies = [
+    "flatsim",
+]
+
+[tool.uv]
+package = false
+
+[tool.uv.sources]
+flatsim = { workspace = true }
+
+[tool.uv.workspace]
+members = [
+    "flatsim",
+]

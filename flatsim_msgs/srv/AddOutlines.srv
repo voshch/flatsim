@@ -1,0 +1,4 @@
+Outline[] outlines  # an existing name is replaced
+---
+bool success
+string message

@@ -1,0 +1,3 @@
+string prefix   # entities, floors and robots whose name starts with it
+---
+uint32 removed

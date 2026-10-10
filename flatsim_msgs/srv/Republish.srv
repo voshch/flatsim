@@ -1,0 +1,3 @@
+string prefix  # robots whose name starts with it, empty = every robot
+---
+bool success

@@ -1,0 +1,26 @@
+target-version = "py312"
+line-length = 320
+src = ["flatsim"]
+extend-exclude = [
+    "**/launch",
+    "**/setup.py",
+]
+
+[lint]
+exclude = ["**/tests/**"]
+select = ["E", "F", "W", "I", "UP", "B", "ANN", "PYI"]
+ignore = ["E501", "E402", "F841", "E731", "PYI051", "E741", "UP035"]
+
+[lint.isort]
+known-first-party = ["flatsim", "flatsim_msgs"]
+
+[lint.flake8-annotations]
+suppress-none-returning = true
+mypy-init-return = true
+allow-star-arg-any = true
+
+[format]
+quote-style = "preserve"
+indent-style = "space"
+skip-magic-trailing-comma = false
+line-ending = "lf"

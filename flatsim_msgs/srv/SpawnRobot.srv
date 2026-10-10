@@ -1,0 +1,19 @@
+string name           # an existing robot of that name is replaced
+string robot_namespace  # absolute namespace of cmd_vel, odom, joint_states
+string tf_topic       # empty = /tf
+string world_frame    # parent of the odom frame, empty = map
+string frame_prefix   # prepended to every frame below when published
+string odom_frame
+string base_frame     # URDF link the footprint and the mounts refer to
+float64 x             # m
+float64 y
+float64 z             # floor height the robot stands on, m
+float64 yaw           # rad
+Ring footprint        # convex hull in the base frame, empty = disc
+float64 radius        # disc radius without a footprint, m
+DriveModel drive
+string urdf           # robot description, read for joints and sensors
+SensorSpec[] sensors
+---
+bool success
+string message

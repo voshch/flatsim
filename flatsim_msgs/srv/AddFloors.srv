@@ -1,0 +1,4 @@
+Floor[] floors  # an existing name is replaced
+---
+bool success
+string message

@@ -1,0 +1,19 @@
+[project]
+name = "flatsim"
+version = "0.1.0"
+dependencies = [
+    "attrs",
+    "numpy",
+    "pyb2d3",
+]
+dynamic = ["description", "license", "maintainers", "scripts"]
+
+[project.optional-dependencies]
+test = ["pytest>=7"]
+
+[tool.uv]
+package = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra --strict-markers"

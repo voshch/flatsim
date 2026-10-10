@@ -1,0 +1,3 @@
+string[] names  # outlines, boxes, discs and floors
+---
+bool[] removed  # false for an unknown name
