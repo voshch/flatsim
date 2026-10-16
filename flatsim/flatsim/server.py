@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import signal
 import threading
 import time
 import traceback
@@ -271,6 +272,7 @@ def main() -> None:
     except (KeyboardInterrupt, rclpy.executors.ExternalShutdownException):
         pass
     finally:
+        signal.signal(signal.SIGINT, signal.SIG_IGN)
         node.destroy_node()
         rclpy.try_shutdown()
 

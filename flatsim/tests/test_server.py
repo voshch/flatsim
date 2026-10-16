@@ -3,6 +3,10 @@
 from __future__ import annotations
 
 import math
+import os
+import signal
+import subprocess
+import sys
 import time
 
 import pytest
@@ -361,3 +365,27 @@ def test_destroying_the_server_stops_its_stepping_thread(flatsim) -> None:
     until(lambda: len(bench.clock) > 3, 5.0, 'free-running clock')
     bench.server.destroy_node()
     assert not bench.server._thread.is_alive()
+
+
+def test_repeated_sigint_shuts_the_server_down_cleanly() -> None:
+    proc = subprocess.Popen(
+        [sys.executable, '-c', 'from flatsim.server import main; main()'],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        env={**os.environ, 'PYTHONUNBUFFERED': '1'},
+    )
+    try:
+        time.sleep(3.0)
+        assert proc.poll() is None
+        for _ in range(40):
+            proc.send_signal(signal.SIGINT)
+            time.sleep(0.005)
+        output, _ = proc.communicate(timeout=15.0)
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait()
+
+    assert 'Traceback' not in output, output
+    assert proc.returncode == 0, output
