@@ -131,7 +131,9 @@ def _point_cloud(points: np.ndarray, frame_id: str, stamp: builtin_interfaces.ms
     cloud.header.frame_id = frame_id
     cloud.height = 1
     cloud.width = len(points)
-    cloud.fields = [sensor_msgs.msg.PointField(name=name, offset=offset, datatype=_POINT_FIELDS[kind.str], count=1) for name, (kind, offset) in points.dtype.fields.items()]
+    fields = points.dtype.fields
+    assert fields is not None
+    cloud.fields = [sensor_msgs.msg.PointField(name=name, offset=field[1], datatype=_POINT_FIELDS[field[0].str], count=1) for name, field in fields.items()]
     cloud.is_bigendian = False
     cloud.point_step = points.dtype.itemsize
     cloud.row_step = points.dtype.itemsize * len(points)
@@ -161,7 +163,7 @@ def _contacts(name: str, touches: list[Touch], z: float, frame_id: str, stamp: b
         contact.collision2.name = other
         contact.positions = [geometry_msgs.msg.Vector3(x=point[0], y=point[1], z=z)]
         contact.normals = [geometry_msgs.msg.Vector3(x=normal[0], y=normal[1])]
-        contacts.contacts.append(contact)
+        contacts.contacts.append(contact)  # pyright: ignore[reportAttributeAccessIssue]
     return contacts
 
 
@@ -301,7 +303,7 @@ class _Opener:
             near, far, reach, rate = camera.near, camera.far, camera_reach(camera.horizontal_fov, camera.far), block.update_rate
             laserscan = None
         elif block is None and laserscan is not None and laserscan.fan:
-            beams = laserscan.fan[0]
+            beams = laserscan.fan[0]  # pyright: ignore[reportIndexIssue]
             azimuth = beams.angle_min + beams.angle_increment * np.arange(beams.beams)
             slopes = ring_slopes(1, 0.0, 0.0)
             near, far, reach, rate = 0.0, beams.range_max, beams.range_max, beams.update_rate or None
@@ -341,7 +343,11 @@ def open_robot(node: rclpy.node.Node, request: SpawnRobot.Request, dt: float, on
     """Create the topics of a spawn request, sensors the URDF cannot back are skipped with a warning."""
     opener = _Opener(node, request, dt)
     namespace = request.robot_namespace.rstrip('/')
-    cmd_vel = node.create_subscription(geometry_msgs.msg.Twist, f'{namespace}/cmd_vel', lambda msg: on_command((msg.linear.x, msg.linear.y, msg.angular.z)), _QUEUE)
+
+    def _on_cmd_vel(msg: geometry_msgs.msg.Twist) -> None:
+        on_command((msg.linear.x, msg.linear.y, msg.angular.z))
+
+    cmd_vel = node.create_subscription(geometry_msgs.msg.Twist, f'{namespace}/cmd_vel', _on_cmd_vel, _QUEUE)
     try:
         ranged: dict[tuple[str, str], dict[str, SensorSpec]] = {}
         imus: list[_Imu] = []

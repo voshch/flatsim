@@ -7,6 +7,7 @@ import signal
 import threading
 import time
 import traceback
+import typing
 from collections.abc import Iterator
 
 import builtin_interfaces.msg
@@ -88,10 +89,10 @@ class _Pace:
 class FlatsimServer(rclpy.node.Node):
     """Steps the world on its clock: free-running at `real_time_factor` when unpaused, on request when paused."""
 
-    def __init__(self, **kwargs: object) -> None:
-        super().__init__(NODE_NAME, **kwargs)
+    def __init__(self, *, parameter_overrides: list[rclpy.parameter.Parameter] | None = None) -> None:
+        super().__init__(NODE_NAME, parameter_overrides=parameter_overrides)
         fixed = rcl_interfaces.msg.ParameterDescriptor(read_only=True)
-        self._dt = float(self.declare_parameter('physics_dt', DEFAULT_DT, fixed).value)
+        self._dt = float(typing.cast(float, self.declare_parameter('physics_dt', DEFAULT_DT, fixed).value))
         if self._dt <= 0.0:
             raise ValueError(f'physics_dt must be positive, got {self._dt}')
         dynamics = str(self.declare_parameter('dynamics', Dynamics.RIGID.value, fixed).value)
@@ -100,7 +101,7 @@ class FlatsimServer(rclpy.node.Node):
         except ValueError as e:
             raise ValueError(f'dynamics must be one of {[choice.value for choice in Dynamics]}, got {dynamics!r}') from e
         self._paused = bool(self.declare_parameter('paused', False, fixed).value)
-        self._real_time_factor = float(self.declare_parameter('real_time_factor', 1.0).value)
+        self._real_time_factor = float(typing.cast(float, self.declare_parameter('real_time_factor', 1.0).value))
         self.add_on_set_parameters_callback(self._on_parameters)
 
         self._ticks = 0
@@ -108,19 +109,16 @@ class FlatsimServer(rclpy.node.Node):
         self._stop = threading.Event()
         self._clock_publisher = self.create_publisher(rosgraph_msgs.msg.Clock, '/clock', rclpy.qos.QoSProfile(depth=10))
 
-        for srv_type, name, callback in (
-            (ControlWorld, 'control_world', self._control_world),
-            (AddFloors, 'add_floors', self._add_floors),
-            (AddOutlines, 'add_outlines', self._add_outlines),
-            (SpawnBoxes, 'spawn_boxes', self._spawn_boxes),
-            (DeleteEntities, 'delete_entities', self._delete_entities),
-            (DeletePrefix, 'delete_prefix', self._delete_prefix),
-            (SpawnRobot, 'spawn_robot', self._spawn_robot),
-            (SetRobotPose, 'set_robot_pose', self._set_robot_pose),
-            (DeleteRobot, 'delete_robot', self._delete_robot),
-            (Republish, 'republish', self._republish),
-        ):
-            self.create_service(srv_type, f'~/{name}', callback, qos_profile=_SERVICE_QOS)
+        self.create_service(ControlWorld, '~/control_world', self._control_world, qos_profile=_SERVICE_QOS)
+        self.create_service(AddFloors, '~/add_floors', self._add_floors, qos_profile=_SERVICE_QOS)
+        self.create_service(AddOutlines, '~/add_outlines', self._add_outlines, qos_profile=_SERVICE_QOS)
+        self.create_service(SpawnBoxes, '~/spawn_boxes', self._spawn_boxes, qos_profile=_SERVICE_QOS)
+        self.create_service(DeleteEntities, '~/delete_entities', self._delete_entities, qos_profile=_SERVICE_QOS)
+        self.create_service(DeletePrefix, '~/delete_prefix', self._delete_prefix, qos_profile=_SERVICE_QOS)
+        self.create_service(SpawnRobot, '~/spawn_robot', self._spawn_robot, qos_profile=_SERVICE_QOS)
+        self.create_service(SetRobotPose, '~/set_robot_pose', self._set_robot_pose, qos_profile=_SERVICE_QOS)
+        self.create_service(DeleteRobot, '~/delete_robot', self._delete_robot, qos_profile=_SERVICE_QOS)
+        self.create_service(Republish, '~/republish', self._republish, qos_profile=_SERVICE_QOS)
         self.create_subscription(Discs, '~/discs', self._on_discs, rclpy.qos.QoSProfile(depth=_TOPIC_QUEUE))
         self.create_subscription(EntityPoses, '~/poses', self._on_poses, rclpy.qos.QoSProfile(depth=_TOPIC_QUEUE))
 
@@ -135,7 +133,7 @@ class FlatsimServer(rclpy.node.Node):
     def _on_parameters(self, parameters: list[rclpy.parameter.Parameter]) -> rcl_interfaces.msg.SetParametersResult:
         for parameter in parameters:
             if parameter.name == 'real_time_factor':
-                self._real_time_factor = float(parameter.value)
+                self._real_time_factor = float(typing.cast(float, parameter.value))
         return rcl_interfaces.msg.SetParametersResult(successful=True)
 
     def _advance(self, steps: int) -> None:

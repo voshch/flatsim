@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import typing
-from collections.abc import Callable
+from collections.abc import Callable, Collection
 
 from flatsim.robot_io import RobotIO, open_robot
 from flatsim.world import Dynamics, FlatWorld, Twist2D
@@ -32,28 +32,28 @@ class Scene:
         if taken:
             raise ValueError(f'{taken} are robots')
 
-    def add_floors(self, floors: list[Floor]) -> None:
+    def add_floors(self, floors: Collection[Floor]) -> None:
         self._free([floor.name for floor in floors])
         levels = {**self._floors, **{floor.name: floor.z for floor in floors}}
         self.world.set_levels(levels.values())
         self._floors = levels
 
-    def add_outlines(self, outlines: list[Outline]) -> None:
+    def add_outlines(self, outlines: Collection[Outline]) -> None:
         self._free([outline.name for outline in outlines])
         for outline in outlines:
             self.world.add_outline(outline.name, [list(zip(ring.x, ring.y, strict=True)) for ring in outline.rings], (outline.z_min, outline.z_max))
 
-    def spawn_boxes(self, boxes: list[Box]) -> None:
+    def spawn_boxes(self, boxes: Collection[Box]) -> None:
         self._free([box.name for box in boxes])
         for box in boxes:
             self.world.add_box(box.name, (box.size_x, box.size_y), (box.x, box.y, box.yaw), (box.z_min, box.z_max))
 
-    def move(self, poses: list[EntityPose]) -> None:
+    def move(self, poses: Collection[EntityPose]) -> None:
         for pose in poses:
             if self._entity(pose.name):
                 self.world.move(pose.name, (pose.x, pose.y, pose.yaw), z=(pose.z_min, pose.z_max))
 
-    def delete(self, names: list[str]) -> list[bool]:
+    def delete(self, names: Collection[str]) -> list[bool]:
         removed: list[bool] = []
         floors = len(self._floors)
         for name in names:

@@ -72,7 +72,14 @@ def _transform(urdf_xml: str, parent: str, child: str) -> np.ndarray:
     for name in (parent, child):
         if name not in links:
             raise ValueError(f'link {name!r} is not in the URDF, known links: {sorted(str(link) for link in links)}')
-    above = {joint.find('child').get('link'): (joint.find('parent').get('link'), _origin(joint)) for joint in root.findall('joint')}
+    above: dict[str, tuple[str, np.ndarray]] = {}
+    for joint in root.findall('joint'):
+        child_tag, parent_tag = joint.find('child'), joint.find('parent')
+        child_link = child_tag.get('link') if child_tag is not None else None
+        parent_link = parent_tag.get('link') if parent_tag is not None else None
+        if child_link is None or parent_link is None:
+            raise ValueError(f'joint {joint.get("name")!r} needs a <parent link> and a <child link>')
+        above[child_link] = (parent_link, _origin(joint))
 
     def from_root(link: str) -> np.ndarray:
         transform = np.eye(4)
@@ -98,7 +105,7 @@ def frame_inverted(urdf_xml: str, parent: str, child: str) -> bool:
 def movable_joints(urdf_xml: str) -> list[str]:
     """Names of the joints robot_state_publisher needs a position for."""
     root = ET.fromstring(urdf_xml)
-    return [joint.get('name') for joint in root.findall('joint') if joint.get('type') in _MOVABLE and joint.find('mimic') is None]
+    return [joint.get('name', '') for joint in root.findall('joint') if joint.get('type') in _MOVABLE and joint.find('mimic') is None]
 
 
 def _number(element: ET.Element, path: str, default: float) -> float:
@@ -139,7 +146,7 @@ def _camera(sensor: ET.Element) -> CameraBlock:
 def sensor_block(urdf_xml: str, name: str, link: str | None = None) -> SensorBlock | None:
     """The <sensor name=`name`> element of a <gazebo reference> block, the one on `link` when several share the name."""
     root = ET.fromstring(urdf_xml)
-    found = [(gazebo.get('reference'), sensor) for gazebo in root.iter('gazebo') if gazebo.get('reference') is not None for sensor in gazebo.iter('sensor') if sensor.get('name') == name]
+    found = [(ref, sensor) for gazebo in root.iter('gazebo') if (ref := gazebo.get('reference')) is not None for sensor in gazebo.iter('sensor') if sensor.get('name') == name]
     if not found:
         return None
     reference, sensor = next((entry for entry in found if entry[0] == link), found[0])

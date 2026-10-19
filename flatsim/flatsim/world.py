@@ -286,7 +286,7 @@ def _inside(points: np.ndarray, core: np.ndarray) -> np.ndarray:
     span = end - start
     rel = points[:, None] - start[None]
     side = span[None, :, 0] * rel[..., 1] - span[None, :, 1] * rel[..., 0]
-    return (side >= 0).all(axis=1) | (side <= 0).all(axis=1)
+    return (side >= 0).all(axis=1) | (side <= 0).all(axis=1)  # pyright: ignore[reportReturnType]
 
 
 def _crossings(a: np.ndarray, b: np.ndarray) -> np.ndarray:
@@ -608,15 +608,15 @@ class FlatWorld:
         """Edges of every box at rest, placed from the pose of its last move and rebuilt only on a change."""
         if self._resting is not None and self._resting[0] == self._version:
             return self._resting[1]
-        boxes = [(name, entity) for name, entity in self._entities.items() if entity.corners is not None and not entity.drifting]
+        boxes = [(name, entity, entity.corners) for name, entity in self._entities.items() if entity.corners is not None and not entity.drifting]
         groups: list[tuple[np.ndarray, bool, int, int]] = []
         if boxes:
-            corners = np.stack([entity.corners for _, entity in boxes])
-            pose = np.array([entity.pose for _, entity in boxes], dtype=np.float64)
+            corners = np.stack([box_corners for _, _, box_corners in boxes])
+            pose = np.array([entity.pose for _, entity, _ in boxes], dtype=np.float64)
             cos, sin = np.cos(pose[:, 2])[:, None], np.sin(pose[:, 2])[:, None]
             placed = np.stack([cos * corners[..., 0] - sin * corners[..., 1] + pose[:, :1], sin * corners[..., 0] + cos * corners[..., 1] + pose[:, 1:2]], axis=-1)
             edges = np.stack([placed, placed[:, _BOX_EDGES]], axis=2)
-            groups = [(edges[i], True, self._uids[name], self._level_bits(entity.z)) for i, (name, entity) in enumerate(boxes)]
+            groups = [(edges[i], True, self._uids[name], self._level_bits(entity.z)) for i, (name, entity, _) in enumerate(boxes)]
         self._resting = (self._version, groups)
         return groups
 
