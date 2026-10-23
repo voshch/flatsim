@@ -367,6 +367,21 @@ def test_destroying_the_server_stops_its_stepping_thread(flatsim) -> None:
     assert not bench.server._thread.is_alive()
 
 
+def test_a_shut_down_context_ends_the_stepping_thread_without_pausing() -> None:
+    rclpy = pytest.importorskip('rclpy')
+    import rclpy.parameter
+
+    from flatsim.server import FlatsimServer
+
+    rclpy.init()
+    server = FlatsimServer(parameter_overrides=[rclpy.parameter.Parameter('physics_dt', value=DT)])
+    time.sleep(0.3)
+    rclpy.shutdown()
+    server._thread.join(timeout=2.0)
+    assert not server._thread.is_alive()
+    assert not server._paused
+
+
 def test_repeated_sigint_shuts_the_server_down_cleanly() -> None:
     proc = subprocess.Popen(
         [sys.executable, '-c', 'from flatsim.server import main; main()'],

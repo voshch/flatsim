@@ -156,7 +156,7 @@ class FlatsimServer(rclpy.node.Node):
                     else:
                         self._clock_publisher.publish(rosgraph_msgs.msg.Clock(clock=stamp_of(self.now)))
             except Exception:
-                if self._stop.is_set():
+                if self._stop.is_set() or not self.context.ok():
                     return
                 self.get_logger().error(f'step failed, pausing\n{traceback.format_exc()}')
                 self._paused = True
