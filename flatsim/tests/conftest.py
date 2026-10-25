@@ -56,6 +56,7 @@ class Robot:
         self.scans: list[sensor_msgs.msg.LaserScan] = []
         self.rear: list[sensor_msgs.msg.LaserScan] = []
         self.clouds: list[sensor_msgs.msg.PointCloud2] = []
+        self.depth: list[sensor_msgs.msg.PointCloud2] = []
         self.imu: list[sensor_msgs.msg.Imu] = []
         self.bumps: list[ros_gz_interfaces.msg.Contacts] = []
         probe = bench.probe
@@ -66,6 +67,7 @@ class Robot:
             probe.create_subscription(sensor_msgs.msg.LaserScan, f'{self.namespace}/scan', self.scans.append, 200),
             probe.create_subscription(sensor_msgs.msg.LaserScan, f'{self.namespace}/rear_scan', self.rear.append, 200),
             probe.create_subscription(sensor_msgs.msg.PointCloud2, f'{self.namespace}/points', self.clouds.append, 200),
+            probe.create_subscription(sensor_msgs.msg.PointCloud2, f'{self.namespace}/depth_points', self.depth.append, 200),
             probe.create_subscription(sensor_msgs.msg.Imu, f'{self.namespace}/imu', self.imu.append, 200),
             probe.create_subscription(ros_gz_interfaces.msg.Contacts, f'{self.namespace}/bumper', self.bumps.append, 200),
         ]
@@ -95,6 +97,7 @@ class Robot:
         request.sensors = [
             sensor('scan', SensorSpec.LASERSCAN, 'lidar_link', 'lidar'),
             sensor('points', SensorSpec.POINTCLOUD, 'lidar_link', 'lidar'),
+            sensor('depth_points', SensorSpec.POINTCLOUD, 'camera_link', 'depth'),
             sensor('imu', SensorSpec.IMU, 'imu_link', 'imu'),
             sensor('rear_scan', SensorSpec.LASERSCAN, 'rear_link', fan=[Fan(angle_min=-1.0, angle_increment=0.02, beams=101, range_max=8.0, update_rate=0.0)]),
             sensor('bumper', SensorSpec.CONTACT, 'base_link'),
@@ -176,7 +179,7 @@ class Bench:
         response = self.call('spawn_robot', robot.request(**pose))
         assert response.success, response.message
         deadline = time.monotonic() + 10.0
-        while not (robot.odom and robot.tf and robot.joints and robot.scans and robot.rear and robot.clouds and robot.imu):
+        while not (robot.odom and robot.tf and robot.joints and robot.scans and robot.rear and robot.clouds and robot.depth and robot.imu):
             assert time.monotonic() < deadline, 'testbot topics did not all arrive'
             self.republish(name)
             time.sleep(0.1)

@@ -217,6 +217,24 @@ def test_lidar_keeps_its_update_rate_and_fills_a_sixteen_ring_cloud(flatsim) -> 
     assert front['z'] == pytest.approx(front['x'] * math.tan(0.261799 / 15), abs=1e-3)
 
 
+def test_pitched_depth_camera_sees_the_floor_flat_in_the_base_frame(flatsim) -> None:
+    import numpy as np
+
+    from flatsim.sensors import CAMERA_POINT
+
+    bench = flatsim()
+    robot = bench.spawn()
+    cloud = robot.depth[-1]
+    assert cloud.header.frame_id == 'testbot/camera_link'
+    points = np.frombuffer(bytes(cloud.data), dtype=CAMERA_POINT)
+    assert len(points) > 0
+    pitch = -0.2576
+    forward = math.cos(pitch) * points['x'] + math.sin(pitch) * points['z']
+    height = 0.4 - math.sin(pitch) * points['x'] + math.cos(pitch) * points['z']
+    assert height == pytest.approx(np.zeros(len(points)), abs=1e-4)
+    assert forward.min() > 0.25 and forward.max() > 3.0
+
+
 def test_rigid_robot_stops_at_a_box_and_reports_the_contact(flatsim) -> None:
     bench = flatsim()
     bench.box('wall', WALL_X)

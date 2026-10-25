@@ -144,6 +144,9 @@ this repository:
 | `contact` | `ros_gz_interfaces/Contacts` | entities and robots the body touches |
 
 A laserscan and a pointcloud that name the same `<sensor>` share one ray cast.
+Rays leave along the full orientation of the sensor frame in the URDF, so a
+pitched or rolled lidar or camera sees the floor and walls where it would in
+3D, and a laserscan is the slice in the sensor's own xy plane.
 Sensors publish on whole multiples of their update period, every step without
 one. Odometry reads the wheel twist, the body twist divided by the gain and
 taken at the pivot, while the IMU reports the body rate. Camera images are not
@@ -165,6 +168,8 @@ The world is usable without ROS: `flatsim.world`, `flatsim.drive`,
   tested only against the shapes its direction can reach.
   `RayHits.first(slope)` is the nearest hit per beam at that elevation, with
   downward beams returning the level floor. `scan` is the planar shorthand.
+  `sensors.ray_plan` lays the rays of a tilted sensor onto one such fan and
+  `RayHits.take` picks each ray's beam.
 - `robot_state` gives pose, body twist and body acceleration, `contacts` the
   entities a robot's shape touches. `DriveModel.encoded` turns a body twist
   into the setpoint it answers to, the twist wheel odometry reads.
