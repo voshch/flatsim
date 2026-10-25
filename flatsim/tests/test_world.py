@@ -413,3 +413,15 @@ def test_advance_takes_only_whole_steps_and_rebases_on_a_clock_that_ran_backward
     assert world.advance(6 * DT + 1e-7) == 3
     assert world.advance(1.0 * DT) == 0
     assert world.time == 1.0 * DT
+
+
+def test_outline_drops_edges_box2d_refuses_and_moves_again():
+    world = FlatWorld(1 / 30)
+    ring = [(0.0, 0.0), (0.003, 0.0), (1.0, 0.0), (1.0, 0.5), (0.001, 0.5), (0.0, 0.5), (0.0, 0.002)]
+    for x in (0.0, 0.5, 1.0):
+        world.add_outline('lid', [[(px + x, py) for px, py in ring]], (0.6, 0.8))
+    shapes = world._entities['lid'].shapes
+    assert len(shapes) == 4
+    assert sorted(world._owners) == sorted(shape.id for shape in shapes)
+    assert world.remove('lid')
+    assert world._owners == {}

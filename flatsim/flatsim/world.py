@@ -27,7 +27,7 @@ _ALL = 0xFFFFFFFFFFFFFFFF
 _LEVELS = (1 << MAX_LEVELS) - 1
 _LEVEL_EPS = 1e-3
 _STEP_EPS = 1e-4
-_POINT_EPS = 1e-9
+_LINEAR_SLOP = 0.005  # Box2D returns an invalid shape for a segment no longer than this
 _SUBSTEPS = 4
 _MAX_HULL = 8
 _CONTACT_MARGIN = 0.01
@@ -326,6 +326,17 @@ def _touch(a: np.ndarray, radius_a: float, b: np.ndarray, radius_b: float, margi
     return separation, (float(point[0]), float(point[1])), (float(normal[0]), float(normal[1]))
 
 
+def _spaced(ring: Sequence[Point]) -> list[Point]:
+    """Ring points without those within the linear slop of the last kept one, the ring still closing on its first point."""
+    kept: list[Point] = []
+    for point in ring:
+        if not kept or math.dist(kept[-1], point) > _LINEAR_SLOP:
+            kept.append(point)
+    while len(kept) > 2 and math.dist(kept[-1], kept[0]) <= _LINEAR_SLOP:
+        kept.pop()
+    return kept
+
+
 class FlatWorld:
     """Box2D world: static outlines, kinematic boxes and discs, velocity-driven robots."""
 
@@ -437,10 +448,10 @@ class FlatWorld:
         shape_def = self._shape_def(z)
         shapes: list[b2.Shape] = []
         segments: list[tuple[Point, Point]] = []
-        for ring in rings:
+        for ring in map(_spaced, rings):
             for i, start in enumerate(ring):
                 end = ring[(i + 1) % len(ring)]
-                if math.dist(start, end) < _POINT_EPS:
+                if math.dist(start, end) <= _LINEAR_SLOP:
                     continue
                 segment = b2.Segment()
                 segment.point1 = (float(start[0]), float(start[1]))
