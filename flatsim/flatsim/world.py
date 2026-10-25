@@ -24,6 +24,7 @@ ROBOT_HEIGHT = 0.5
 GROUND_SLAB = 0.05
 
 _ALL = 0xFFFFFFFFFFFFFFFF
+_LEVELS = (1 << MAX_LEVELS) - 1
 _LEVEL_EPS = 1e-3
 _STEP_EPS = 1e-4
 _POINT_EPS = 1e-9
@@ -411,7 +412,7 @@ class FlatWorld:
         return robot.z, robot.z + robot.height
 
     def _filter_entity(self, entity: _Entity) -> None:
-        flt = b2.make_filter(category_bits=self._level_bits(entity.z), mask_bits=_ALL)
+        flt = b2.make_filter(category_bits=self._level_bits(entity.z), mask_bits=_LEVELS if entity.corners is None and entity.segments is None else _ALL)
         for shape in entity.shapes:
             shape.filter = flt
 
@@ -426,8 +427,8 @@ class FlatWorld:
             robot.ray_mask = mask
             robot.shape.filter = b2.make_filter(category_bits=1 << (MAX_LEVELS + robot.slot), mask_bits=mask)
 
-    def _shape_def(self, z: tuple[float, float]) -> b2.ShapeDef:
-        return b2.shape_def(filter=b2.make_filter(category_bits=self._level_bits(z), mask_bits=_ALL))
+    def _shape_def(self, z: tuple[float, float], mask: int = _ALL) -> b2.ShapeDef:
+        return b2.shape_def(filter=b2.make_filter(category_bits=self._level_bits(z), mask_bits=mask))
 
     def add_outline(self, name: str, rings: Sequence[Sequence[Point]], z: tuple[float, float]) -> None:
         """Static obstacle whose closed rings become two-sided segments."""
@@ -461,13 +462,13 @@ class FlatWorld:
         self._own(name, [shape])
 
     def add_disc(self, name: str, radius: float, position: Point, z: tuple[float, float]) -> None:
-        """Kinematic disc, the shape of a pedestrian."""
+        """Kinematic disc, the shape of a pedestrian, touching robots without pushing them."""
         self.remove(name)
         body = self._world.create_kinematic_body(position=(float(position[0]), float(position[1])))
         circle = b2.Circle()
         circle.center = (0.0, 0.0)
         circle.radius = float(radius)
-        shape = body.create_circle_shape(self._shape_def(z), circle)
+        shape = body.create_circle_shape(self._shape_def(z, _LEVELS), circle)
         self._entities[name] = _Entity(body, [shape], z, radius=float(radius))
         self._own(name, [shape])
 
@@ -694,7 +695,7 @@ class FlatWorld:
         margin = _CONTACT_MARGIN if self._dynamics is Dynamics.RIGID else 0.0
         box = robot.body.compute_aabb()
         query = b2.QueryFilter()
-        query.category_bits = 1 << (MAX_LEVELS + robot.slot)
+        query.category_bits = (1 << (MAX_LEVELS + robot.slot)) | (1 << self.level(robot.z))
         query.mask_bits = robot.ray_mask
         found: list[b2.Shape] = []
         self._world.overlap_aabb(b2.aabb((box.lower_bound.x - margin, box.lower_bound.y - margin), (box.upper_bound.x + margin, box.upper_bound.y + margin)), found.append, query)

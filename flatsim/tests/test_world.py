@@ -257,14 +257,27 @@ def test_wall_stops_a_rigid_robot_and_lets_a_kinematic_one_through(dynamics: Dyn
         assert state.x == pytest.approx(4.0, abs=1e-3)
 
 
-@pytest.mark.parametrize(('dynamics', 'pushed'), [(Dynamics.RIGID, True), (Dynamics.KINEMATIC, False)])
-def test_walking_disc_pushes_only_a_rigid_robot(dynamics: Dynamics, pushed: bool):
+@pytest.mark.parametrize('dynamics', [Dynamics.RIGID, Dynamics.KINEMATIC])
+def test_walking_disc_touches_a_robot_without_pushing_it(dynamics: Dynamics):
     world = FlatWorld(DT, dynamics)
     world.add_robot('robot', (0.0, 0.0, 0.0), 0.0, FREE, radius=0.3)
     world.add_disc('ped', 0.3, (-2.0, 0.0), (0.0, 1.8))
     world.move('ped', (-2.0, 0.0, 0.0), velocity=(1.0, 0.0))
+    world.advance(1.8)
+    assert [name for name, _, _ in world.contacts('robot')] == ['ped']
     world.advance(3.0)
-    assert (world.robot_state('robot').x > 0.3) is pushed
+    state = world.robot_state('robot')
+    assert (state.x, state.y, state.vx) == pytest.approx((0.0, 0.0, 0.0), abs=1e-9)
+
+
+def test_rigid_robot_still_reports_a_disc_after_a_level_change():
+    world = FlatWorld(DT, Dynamics.RIGID)
+    world.set_levels([0.0, 3.0])
+    world.add_robot('robot', (0.0, 0.0, 0.0), 3.0, FREE, radius=0.3)
+    world.add_disc('ped', 0.3, (0.0, 0.5), (3.0, 4.8))
+    assert [name for name, _, _ in world.contacts('robot')] == ['ped']
+    world.set_robot_pose('robot', (0.0, 0.0, 0.0), 0.0)
+    assert world.contacts('robot') == []
 
 
 def test_robots_on_one_level_see_each_other_but_never_themselves():

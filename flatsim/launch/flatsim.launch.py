@@ -10,7 +10,7 @@ def generate_launch_description() -> launch.LaunchDescription:
         launch.actions.DeclareLaunchArgument('physics_dt', default_value='0.0333', description='Physics step in sim seconds.'),
         launch.actions.DeclareLaunchArgument('real_time_factor', default_value='1.0', description='Sim seconds per wall second while unpaused, 0 = as fast as it can.'),
         launch.actions.DeclareLaunchArgument('paused', default_value='false', choices=['true', 'false'], description='Start paused, stepping only on request.'),
-        launch.actions.DeclareLaunchArgument('dynamics', default_value='rigid', choices=['rigid', 'kinematic'], description='rigid = walls, obstacles and discs stop or push a robot, kinematic = it passes through.'),
+        launch.actions.DeclareLaunchArgument('dynamics', default_value='rigid', choices=['rigid', 'kinematic'], description='rigid = walls and obstacles stop or push a robot and pedestrian discs touch it without pushing, kinematic = it passes through.'),
     ]
 
     def parameter(name: str, value_type: type) -> launch_ros.parameter_descriptions.ParameterValue:

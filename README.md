@@ -69,7 +69,7 @@ Parameters of the `flatsim` node (launch arguments of the same names):
 | `physics_dt` | `0.0333` | Physics step in sim seconds. Fixed at start. |
 | `real_time_factor` | `1.0` | Pace while unpaused, `0` = unbounded. Can be set while running. |
 | `paused` | `false` | Start paused. Fixed at start, changed through `control_world`. |
-| `dynamics` | `rigid` | `rigid`: walls, obstacles and discs stop or push a robot. `kinematic`: it passes through, contacts are still published. Fixed at start. |
+| `dynamics` | `rigid` | `rigid`: walls and obstacles stop or push a robot, pedestrian discs touch it without pushing. `kinematic`: it passes through, contacts are still published. Fixed at start. |
 
 ## World
 
