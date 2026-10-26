@@ -6,7 +6,7 @@ import math
 
 import pytest
 
-from flatsim.urdf import CameraBlock, LidarBlock, frame_inverted, frame_offset, movable_joints, sensor_block
+from flatsim.urdf import CameraBlock, LidarBlock, frame_offset, frame_rotation, movable_joints, sensor_block
 
 URDF = """<?xml version="1.0"?>
 <robot name="probe">
@@ -180,10 +180,10 @@ def test_movable_joints_skip_fixed_and_mimic():
 
 
 def test_inverted_frame_is_told_by_its_z_axis_whatever_the_yaw():
-    assert frame_inverted(URDF, 'base_link', 'rear_laser')
-    assert frame_inverted(URDF, 'base_link', 'imu_link')
-    assert not frame_inverted(URDF, 'base_link', 'lidar_link')
-    assert not frame_inverted(URDF, 'base_link', 'camera_link')
+    assert frame_rotation(URDF, 'base_link', 'rear_laser')[2, 2] < 0.0
+    assert frame_rotation(URDF, 'base_link', 'imu_link')[2, 2] < 0.0
+    assert frame_rotation(URDF, 'base_link', 'lidar_link')[2, 2] > 0.0
+    assert frame_rotation(URDF, 'base_link', 'camera_link')[2, 2] > 0.0
     assert frame_offset(URDF, 'base_link', 'rear_laser') == pytest.approx((-0.3, 0.0, 0.25, 2.356194490192345))
 
 

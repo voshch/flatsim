@@ -97,9 +97,9 @@ def frame_offset(urdf_xml: str, parent: str, child: str) -> tuple[float, float, 
     return float(offset[0, 3]), float(offset[1, 3]), float(offset[2, 3]), math.atan2(offset[1, 0], offset[0, 0])
 
 
-def frame_inverted(urdf_xml: str, parent: str, child: str) -> bool:
-    """Whether the z axis of link `child` points down in link `parent`."""
-    return bool(_transform(urdf_xml, parent, child)[2, 2] < 0.0)
+def frame_rotation(urdf_xml: str, parent: str, child: str) -> np.ndarray:
+    """Rotation of link `child` in link `parent` with every joint at zero."""
+    return _transform(urdf_xml, parent, child)[:3, :3]
 
 
 def movable_joints(urdf_xml: str) -> list[str]:

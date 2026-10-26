@@ -62,6 +62,10 @@ class RayHits:
     hi: np.ndarray
     floor: float = -math.inf
 
+    def take(self, beam: np.ndarray) -> RayHits:
+        """Hits of the beams `beam` indexes, in its shape."""
+        return RayHits(self.distance[beam], self.lo[beam], self.hi[beam], self.floor)
+
     def first(self, slope: np.ndarray | float = 0.0) -> np.ndarray:
         """Horizontal distance to the first entity whose z extent holds each beam at `slope` (rise per meter, broadcast over beams), or to the floor for a downward beam, inf for none."""
         slope = np.asarray(slope, dtype=np.float64)

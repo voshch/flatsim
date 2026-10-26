@@ -17,8 +17,8 @@ import sensor_msgs.msg
 import tf2_msgs.msg
 
 from flatsim.drive import Axis, DriveModel
-from flatsim.sensors import camera_cloud, camera_grid, camera_reach, cast_fan, fan, imu_acceleration, lidar_cloud, ring_slopes
-from flatsim.urdf import frame_inverted, frame_offset, movable_joints, sensor_block
+from flatsim.sensors import RayPlan, camera_cloud, camera_grid, camera_reach, fan, imu_acceleration, lidar_cloud, ray_plan, ring_slopes, scan_ranges
+from flatsim.urdf import frame_offset, frame_rotation, movable_joints, sensor_block
 from flatsim.world import FlatWorld, RobotState, ScanSpec, Touch, Twist2D
 from flatsim_msgs.msg import DriveModel as DriveModelMsg
 from flatsim_msgs.msg import SensorSpec
@@ -78,12 +78,11 @@ class _Output:
 
 @attrs.define
 class _Rays:
-    """One backing lidar or camera, a single cast per update feeds its scan and its cloud."""
+    """One backing lidar or camera, a single cast per update feeds its scan (the plan's last row) and its cloud."""
 
     spec: ScanSpec
+    plan: RayPlan
     azimuth: np.ndarray
-    slopes: np.ndarray
-    up: float
     near: float
     far: float
     camera: bool
@@ -115,7 +114,7 @@ def _laser_scan(rays: _Rays, ranges: np.ndarray, frame_id: str, stamp: builtin_i
     scan.header.frame_id = frame_id
     scan.angle_min = float(rays.azimuth[0])
     scan.angle_max = float(rays.azimuth[-1])
-    scan.angle_increment = rays.up * rays.spec.angle_increment
+    scan.angle_increment = float(rays.azimuth[1] - rays.azimuth[0]) if len(rays.azimuth) > 1 else 0.0
     scan.time_increment = 0.0
     scan.scan_time = rays.rate.period
     scan.range_min = rays.near
@@ -219,11 +218,11 @@ class RobotIO:
         return joint_state
 
     def _publish_rays(self, world: FlatWorld, rays: _Rays, stamp: builtin_interfaces.msg.Time) -> None:
-        hits = world.cast(self.name, rays.spec)
+        distance = world.cast(self.name, rays.spec).take(rays.plan.beam).first(rays.plan.slope)
         if rays.scan is not None:
-            rays.scan.publisher.publish(_laser_scan(rays, hits.first(), rays.scan.frame_id, stamp))
+            rays.scan.publisher.publish(_laser_scan(rays, scan_ranges(distance[-1], rays.plan.offset[-1], rays.far), rays.scan.frame_id, stamp))
         if rays.cloud is not None:
-            points = (camera_cloud if rays.camera else lidar_cloud)(hits.first(rays.up * rays.slopes), rays.azimuth, rays.slopes, rays.near, rays.far)
+            points = (camera_cloud if rays.camera else lidar_cloud)(distance[:-1], rays.plan.offset[:-1], rays.near, rays.far)
             rays.cloud.publisher.publish(_point_cloud(points, rays.cloud.frame_id, stamp))
 
     def publish_transforms(self, world: FlatWorld, stamp: builtin_interfaces.msg.Time) -> None:
@@ -276,10 +275,10 @@ class _Opener:
     def _output(self, sensor: SensorSpec, msg_type: type) -> _Output:
         return _Output(self.publisher(msg_type, sensor.topic), self.request.frame_prefix + sensor.frame)
 
-    def _mount(self, sensors: list[SensorSpec], frame: str) -> tuple[float, float, float, float, bool] | None:
-        """Pose (x, y, z, yaw) of a sensor frame in the base frame and whether it hangs upside down, None for a frame the URDF lacks."""
+    def _mount(self, sensors: list[SensorSpec], frame: str) -> tuple[float, float, float, float, np.ndarray] | None:
+        """Pose (x, y, z, yaw) and rotation of a sensor frame in the base frame, None for a frame the URDF lacks."""
         try:
-            return *frame_offset(self.request.urdf, self.request.base_frame, frame), frame_inverted(self.request.urdf, self.request.base_frame, frame)
+            return *frame_offset(self.request.urdf, self.request.base_frame, frame), frame_rotation(self.request.urdf, self.request.base_frame, frame)
         except ValueError as e:
             self._warn(f'{e}, sensors {[sensor.name for sensor in sensors]} are not simulated')
             return None
@@ -296,33 +295,34 @@ class _Opener:
             lidar = block.lidar
             azimuth = fan(lidar.samples, lidar.min_angle, lidar.max_angle)
             slopes = ring_slopes(lidar.vertical_samples, lidar.vertical_min_angle, lidar.vertical_max_angle)
-            near, far, reach, rate = lidar.range_min, lidar.range_max, lidar.range_max, block.update_rate
+            near, far, rate = lidar.range_min, lidar.range_max, block.update_rate
         elif block is not None and block.camera is not None and pointcloud is not None:
             camera = block.camera
             azimuth, slopes = camera_grid(camera.horizontal_fov, camera.width, camera.height)
-            near, far, reach, rate = camera.near, camera.far, camera_reach(camera.horizontal_fov, camera.far), block.update_rate
+            near, far, rate = camera.near, camera.far, block.update_rate
             laserscan = None
         elif block is None and laserscan is not None and laserscan.fan:
             beams = laserscan.fan[0]  # pyright: ignore[reportIndexIssue]
             azimuth = beams.angle_min + beams.angle_increment * np.arange(beams.beams)
             slopes = ring_slopes(1, 0.0, 0.0)
-            near, far, reach, rate = 0.0, beams.range_max, beams.range_max, beams.update_rate or None
+            near, far, rate = 0.0, beams.range_max, beams.update_rate or None
         else:
             self._warn(f'no lidar or camera sensor {backing!r} in the URDF to back {[sensor.name for sensor in specs.values()]}, not simulated')
             return None
         mount = self._mount(list(specs.values()), frame)
         if mount is None:
             return None
-        x, y, z, yaw, inverted = mount
-        angle_min, angle_increment = cast_fan(azimuth, inverted)
+        x, y, z, _, rotation = mount
+        camera = block is not None and block.camera is not None
+        plan = ray_plan(rotation, azimuth, np.vstack([np.broadcast_to(slopes, (len(slopes), len(azimuth))), np.zeros((1, len(azimuth)))]))
+        reach = camera_reach(plan.offset[:-1], far) if camera else far
         return _Rays(
-            spec=ScanSpec(mount=(x, y, yaw), angle_min=angle_min, angle_increment=angle_increment, beams=len(azimuth), range_min=near, range_max=reach, height=z),
+            spec=ScanSpec(mount=(x, y, 0.0), angle_min=plan.angle_min, angle_increment=plan.angle_increment, beams=plan.beams, range_min=near, range_max=reach, height=z),
+            plan=plan,
             azimuth=azimuth,
-            slopes=slopes,
-            up=-1.0 if inverted else 1.0,
             near=near,
             far=far,
-            camera=block is not None and block.camera is not None,
+            camera=camera,
             rate=self._rate(rate),
             scan=self._output(laserscan, sensor_msgs.msg.LaserScan) if laserscan is not None else None,
             cloud=self._output(pointcloud, sensor_msgs.msg.PointCloud2) if pointcloud is not None else None,

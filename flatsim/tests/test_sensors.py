@@ -8,7 +8,8 @@ import numpy as np
 import pytest
 
 from flatsim.drive import Axis, DriveModel
-from flatsim.sensors import CAMERA_POINT, GRAVITY, LIDAR_POINT, MAX_CAMERA_COLUMNS, MAX_CAMERA_ROWS, camera_cloud, camera_grid, camera_reach, cast_fan, fan, imu_acceleration, lidar_cloud, ring_slopes
+from flatsim.sensors import CAMERA_POINT, GRAVITY, LIDAR_POINT, MAX_CAMERA_COLUMNS, MAX_CAMERA_ROWS, RayPlan, camera_cloud, camera_grid, camera_reach, fan, imu_acceleration, lidar_cloud, ray_plan, ring_slopes, scan_ranges
+from flatsim.urdf import frame_rotation
 from flatsim.world import Dynamics, FlatWorld, ScanSpec
 
 DT = 1.0 / 30.0
@@ -16,6 +17,25 @@ FREE = DriveModel(linear=Axis(-1.0, 1.0), lateral=Axis(0.0, 0.0), angular=Axis(-
 VLP16 = (16, -0.261799, 0.261799)
 PLANAR = (1, 0.0, 0.0)
 D435 = (1.5184351666666667, 640, 480)
+UPRIGHT = '0 0 0'
+FLIPPED = '3.141592653589793 0 0'
+
+
+def _mounted(rpy: str) -> np.ndarray:
+    """Rotation of a sensor link fixed to the base at `rpy`."""
+    urdf = f'<robot name="mount"><link name="base"/><link name="sensor"/><joint name="mount" type="fixed"><parent link="base"/><child link="sensor"/><origin rpy="{rpy}"/></joint></robot>'
+    return frame_rotation(urdf, 'base', 'sensor')
+
+
+def _plan(rpy: str, azimuth: np.ndarray, slopes: np.ndarray) -> RayPlan:
+    """Plan of the given rays plus a last row in the sensor's own xy plane."""
+    return ray_plan(_mounted(rpy), azimuth, np.vstack([np.broadcast_to(slopes, (len(slopes), len(azimuth))), np.zeros((1, len(azimuth)))]))
+
+
+def _cast(world: FlatWorld, plan: RayPlan, mount: tuple[float, float], height: float, reach: float) -> np.ndarray:
+    """Horizontal distance per ray of `plan` from one cast of robot `robot`."""
+    spec = ScanSpec(mount=(*mount, 0.0), angle_min=plan.angle_min, angle_increment=plan.angle_increment, beams=plan.beams, range_min=0.0, range_max=reach, height=height)
+    return world.cast('robot', spec).take(plan.beam).first(plan.slope)
 
 
 def _lidar(
@@ -29,18 +49,16 @@ def _lidar(
     """Scan ranges and cloud of one lidar on robot `robot`, both from a single cast."""
     azimuth = fan(*horizontal)
     slopes = ring_slopes(*vertical)
-    angle_min, angle_increment = cast_fan(azimuth, inverted)
-    spec = ScanSpec(mount=(0.0, 0.0, 0.0), angle_min=angle_min, angle_increment=angle_increment, beams=len(azimuth), range_min=limits[0], range_max=limits[1], height=height)
-    hits = world.cast('robot', spec)
-    cloud = lidar_cloud(hits.first(-slopes if inverted else slopes), azimuth, slopes, *limits)
-    return hits.first(), cloud, azimuth, slopes
+    plan = _plan(FLIPPED if inverted else UPRIGHT, azimuth, slopes)
+    distance = _cast(world, plan, (0.0, 0.0), height, limits[1])
+    return scan_ranges(distance[-1], plan.offset[-1], limits[1]), lidar_cloud(distance[:-1], plan.offset[:-1], *limits), azimuth, slopes
 
 
-def _camera(world: FlatWorld, mount: tuple[float, float, float], height: float, near: float, far: float) -> np.ndarray:
-    azimuth, slopes = camera_grid(*D435)
-    angle_min, angle_increment = cast_fan(azimuth, False)
-    spec = ScanSpec(mount=mount, angle_min=angle_min, angle_increment=angle_increment, beams=len(azimuth), range_min=near, range_max=camera_reach(D435[0], far), height=height)
-    return camera_cloud(world.cast('robot', spec).first(slopes), azimuth, slopes, near, far)
+def _camera(world: FlatWorld, rpy: str, height: float, near: float, far: float) -> np.ndarray:
+    """Cloud of a D435 at (0.2, 0) on robot `robot`."""
+    plan = _plan(rpy, *camera_grid(*D435))
+    distance = _cast(world, plan, (0.2, 0.0), height, camera_reach(plan.offset[:-1], far))
+    return camera_cloud(distance[:-1], plan.offset[:-1], near, far)
 
 
 def _boxes() -> FlatWorld:
@@ -171,7 +189,7 @@ def test_camera_cloud_lands_on_the_wall_within_its_height_or_the_floor_and_the_c
     world = FlatWorld(DT)
     world.add_robot('robot', (0.0, 0.0, 0.0), 0.0, FREE)
     world.add_box('wall', (0.2, 20.0), (3.1, 0.0, 0.0), (0.0, 2.5))
-    cloud = _camera(world, (0.2, 0.0, 0.0), 1.0, 0.105, 8.0)
+    cloud = _camera(world, UPRIGHT, 1.0, 0.105, 8.0)
     floor = np.isclose(cloud['z'], -1.0, atol=1e-4)
     wall = cloud[~floor]
     elevation = np.arctan(camera_grid(*D435)[1][:, 80] / math.cos(camera_grid(*D435)[0][80]))
@@ -187,13 +205,54 @@ def test_camera_cloud_lands_on_the_wall_within_its_height_or_the_floor_and_the_c
     assert wall['z'].min() < -0.8 and wall['z'].max() > 1.3
     assert len(cloud.tobytes()) == 12 * len(cloud)
 
-    near = _camera(world, (0.2, 0.0, 0.0), 1.0, 0.105, 2.7)
+    near = _camera(world, UPRIGHT, 1.0, 0.105, 2.7)
     assert len(near) > 0 and np.isclose(near['z'], -1.0, atol=1e-4).all()
-    assert len(_camera(world, (0.2, 0.0, 0.0), 1.0, 2.9, 8.0)) == 0
-    turned = _camera(world, (0.2, 0.0, math.pi / 2), 1.0, 0.105, 8.0)
+    assert len(_camera(world, UPRIGHT, 1.0, 2.9, 8.0)) == 0
+    turned = _camera(world, '0 0 1.5707963267948966', 1.0, 0.105, 8.0)
     turned = turned[~np.isclose(turned['z'], -1.0, atol=1e-4)]
     assert len(turned) > 0
     assert turned['y'] == pytest.approx(np.full(len(turned), -2.8), abs=1e-4)
+
+
+@pytest.mark.parametrize('rpy', ['0 -0.2576 0', FLIPPED, '3.141592653589793 0.3 0', '0.2 0.5 0.4', '0 1.2 0'])
+def test_tilted_camera_floor_lies_flat_in_the_base_frame_and_within_the_field_of_view(rpy: str):
+    world = FlatWorld(DT)
+    world.add_robot('robot', (0.0, 0.0, 0.0), 0.0, FREE)
+    cloud = _camera(world, rpy, 0.5, 0.105, 8.0)
+    assert len(cloud) > 0
+    sensor = np.stack([cloud['x'], cloud['y'], cloud['z']], axis=1).astype(np.float64)
+    base = sensor @ _mounted(rpy).T + (0.2, 0.0, 0.5)
+    assert base[:, 2] == pytest.approx(np.zeros(len(base)), abs=1e-4)
+    assert (sensor[:, 0] > 0.0).all()
+    assert np.abs(sensor[:, 1] / sensor[:, 0]).max() <= math.tan(D435[0] / 2.0) + 0.02
+    assert np.abs(sensor[:, 2] / sensor[:, 0]).max() <= math.tan(D435[0] / 2.0) * 480 / 640 + 0.02
+
+
+def test_camera_pitched_down_sees_the_floor_on_every_ray():
+    world = FlatWorld(DT)
+    world.add_robot('robot', (0.0, 0.0, 0.0), 0.0, FREE)
+    assert len(_camera(world, '0 1.2 0', 0.5, 0.105, 8.0)) == MAX_CAMERA_ROWS * MAX_CAMERA_COLUMNS
+
+
+def test_pitched_planar_lidar_returns_hold_their_height_in_the_base_frame():
+    world = FlatWorld(DT)
+    world.add_robot('robot', (0.0, 0.0, 0.0), 0.0, FREE)
+    world.add_box('wall', (0.2, 20.0), (3.1, 0.0, 0.0), (0.0, 2.0))
+    rpy, height = '0 0.1 0', 0.5
+    azimuth = fan(181, -math.pi / 2, math.pi / 2)
+    plan = _plan(rpy, azimuth, ring_slopes(*PLANAR))
+    distance = _cast(world, plan, (0.0, 0.0), height, 12.0)
+    ranges = scan_ranges(distance[-1], plan.offset[-1], 12.0)
+    assert ranges[90] == pytest.approx(3.0 / math.cos(0.1), abs=1e-4)
+    assert np.isinf(ranges[[0, -1]]).all()
+    cloud = lidar_cloud(distance[:-1], plan.offset[:-1], 0.08, 12.0)
+    base = np.stack([cloud['x'], cloud['y'], cloud['z']], axis=1).astype(np.float64) @ _mounted(rpy).T + (0.0, 0.0, height)
+    on_floor = np.isclose(base[:, 2], 0.0, atol=1e-4)
+    on_wall = np.isclose(base[:, 0], 3.0, atol=1e-4)
+    assert on_wall.any() and (on_floor | on_wall).all()
+    assert ((base[on_wall, 2] >= 0.0) & (base[on_wall, 2] <= 2.0)).all()
+    ahead = base[np.abs(base[:, 1]) < 1e-6]
+    assert ahead == pytest.approx(np.array([[3.0, 0.0, height - 3.0 * math.tan(0.1)]]), abs=1e-4)
 
 
 def test_imu_reads_a_speed_up_and_a_steady_turn_in_its_own_frame():

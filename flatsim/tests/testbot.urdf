@@ -6,6 +6,7 @@
   <link name="lidar_link"/>
   <link name="imu_link"/>
   <link name="rear_link"/>
+  <link name="camera_link"/>
   <joint name="left_wheel_joint" type="continuous">
     <parent link="base_link"/><child link="left_wheel"/>
     <origin xyz="0 0.15 0.05"/>
@@ -28,6 +29,10 @@
     <parent link="base_link"/><child link="rear_link"/>
     <origin xyz="-0.2 0 0.2" rpy="0 0 3.141592653589793"/>
   </joint>
+  <joint name="camera_joint" type="fixed">
+    <parent link="base_link"/><child link="camera_link"/>
+    <origin xyz="0.25 0 0.4" rpy="0 -0.2576 0"/>
+  </joint>
   <gazebo reference="lidar_link">
     <sensor name="lidar" type="gpu_lidar">
       <update_rate>10</update_rate>
@@ -49,6 +54,22 @@
           <max>20.0</max>
         </range>
       </lidar>
+    </sensor>
+  </gazebo>
+  <gazebo reference="camera_link">
+    <sensor name="depth" type="depth_camera">
+      <update_rate>10</update_rate>
+      <camera>
+        <horizontal_fov>1.5184351666666667</horizontal_fov>
+        <image>
+          <width>64</width>
+          <height>48</height>
+        </image>
+        <clip>
+          <near>0.105</near>
+          <far>6.0</far>
+        </clip>
+      </camera>
     </sensor>
   </gazebo>
   <gazebo reference="imu_link">
