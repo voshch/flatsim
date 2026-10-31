@@ -11,6 +11,7 @@ def generate_launch_description() -> launch.LaunchDescription:
         launch.actions.DeclareLaunchArgument('real_time_factor', default_value='1.0', description='Sim seconds per wall second while unpaused, 0 = as fast as it can.'),
         launch.actions.DeclareLaunchArgument('paused', default_value='false', choices=['true', 'false'], description='Start paused, stepping only on request.'),
         launch.actions.DeclareLaunchArgument('dynamics', default_value='rigid', choices=['rigid', 'kinematic'], description='rigid = walls and obstacles stop or push a robot and pedestrian discs touch it without pushing, kinematic = it passes through.'),
+        launch.actions.DeclareLaunchArgument('physics', default_value='auto', choices=['auto', 'box2d', 'warp'], description='Physics engine, auto = warp when a CUDA device is visible, else box2d.'),
     ]
 
     def parameter(name: str, value_type: type) -> launch_ros.parameter_descriptions.ParameterValue:
@@ -27,6 +28,7 @@ def generate_launch_description() -> launch.LaunchDescription:
                 'real_time_factor': parameter('real_time_factor', float),
                 'paused': parameter('paused', bool),
                 'dynamics': parameter('dynamics', str),
+                'physics': parameter('physics', str),
             }
         ],
     )

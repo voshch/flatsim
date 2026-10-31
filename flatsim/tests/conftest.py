@@ -190,8 +190,8 @@ class Bench:
         time.sleep(0.05)
 
 
-@pytest.fixture()
-def flatsim() -> Iterator[Callable[..., Bench]]:
+@pytest.fixture(params=['box2d', 'warp'])
+def flatsim(request: pytest.FixtureRequest) -> Iterator[Callable[..., Bench]]:
     """Factory of a paused server (or one with the given parameters) and its probe."""
     rclpy = pytest.importorskip('rclpy')
     pytest.importorskip('flatsim_msgs')
@@ -216,7 +216,7 @@ def flatsim() -> Iterator[Callable[..., Bench]]:
         nodes.append(node)
 
     def start(**parameters: object) -> Bench:
-        overrides = {'physics_dt': DT, 'paused': True, **parameters}
+        overrides = {'physics_dt': DT, 'paused': True, 'physics': request.param, **parameters}
         server = FlatsimServer(parameter_overrides=[rclpy.parameter.Parameter(name, value=value) for name, value in overrides.items()])
         probe = rclpy.node.Node('flatsim_probe')
         spin(server)

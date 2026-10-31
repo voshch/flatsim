@@ -5,8 +5,9 @@ from __future__ import annotations
 import typing
 from collections.abc import Callable, Collection
 
+from flatsim.physics import Physics, make_world
 from flatsim.robot_io import RobotIO, open_robot
-from flatsim.world import Dynamics, FlatWorld, Twist2D
+from flatsim.world import Dynamics, Twist2D
 
 if typing.TYPE_CHECKING:
     import builtin_interfaces.msg
@@ -19,8 +20,8 @@ if typing.TYPE_CHECKING:
 class Scene:
     """Entities, floors and robots of the world, every name unique across them."""
 
-    def __init__(self, dt: float, dynamics: Dynamics) -> None:
-        self.world = FlatWorld(dt, dynamics)
+    def __init__(self, dt: float, dynamics: Dynamics, physics: Physics = Physics.AUTO) -> None:
+        self.world = make_world(dt, dynamics, physics)
         self.robots: dict[str, RobotIO] = {}
         self._floors: dict[str, float] = {}
 
@@ -125,9 +126,11 @@ class Scene:
             self.publish(stamp, every=False)
 
     def publish(self, stamp: builtin_interfaces.msg.Time, every: bool, prefix: str = '') -> None:
-        for name, io in self.robots.items():
-            if name.startswith(prefix):
-                io.publish(self.world, stamp, every)
+        robots = [io for name, io in self.robots.items() if name.startswith(prefix)]
+        due = [io.due_rays(self.world.time, every) for io in robots]
+        distances = iter(self.world.first_many([(io.name, rays.spec, rays.plan.beam, rays.plan.slope) for io, sensors in zip(robots, due, strict=True) for rays in sensors]))
+        for io, sensors in zip(robots, due, strict=True):
+            io.publish(self.world, stamp, every, [(rays, next(distances)) for rays in sensors])
 
     def close(self, node: rclpy.node.Node) -> None:
         for io in self.robots.values():

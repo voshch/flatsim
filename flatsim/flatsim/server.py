@@ -19,6 +19,7 @@ import rclpy.parameter
 import rclpy.qos
 import rosgraph_msgs.msg
 
+from flatsim.physics import Physics
 from flatsim.scene import Scene
 from flatsim.world import Dynamics, Twist2D
 from flatsim_msgs.msg import Discs, EntityPoses
@@ -96,8 +97,11 @@ class FlatsimServer(rclpy.node.Node):
         if self._dt <= 0.0:
             raise ValueError(f'physics_dt must be positive, got {self._dt}')
         dynamics = str(self.declare_parameter('dynamics', Dynamics.RIGID.value, fixed).value)
+        physics = str(self.declare_parameter('physics', Physics.AUTO.value, fixed).value)
+        if physics not in {choice.value for choice in Physics}:
+            raise ValueError(f'physics must be one of {[choice.value for choice in Physics]}, got {physics!r}')
         try:
-            self._scene = Scene(self._dt, Dynamics(dynamics))
+            self._scene = Scene(self._dt, Dynamics(dynamics), Physics(physics))
         except ValueError as e:
             raise ValueError(f'dynamics must be one of {[choice.value for choice in Dynamics]}, got {dynamics!r}') from e
         self._paused = bool(self.declare_parameter('paused', False, fixed).value)
@@ -124,7 +128,7 @@ class FlatsimServer(rclpy.node.Node):
 
         self._thread = threading.Thread(target=self._run, name='flatsim_steps', daemon=True)
         self._thread.start()
-        self.get_logger().info(f'flatsim up: dt {self._dt}, {dynamics}, real_time_factor {self._real_time_factor:g}, {"paused" if self._paused else "running"}')
+        self.get_logger().info(f'flatsim up: {type(self._scene.world).__name__}, dt {self._dt}, {dynamics}, real_time_factor {self._real_time_factor:g}, {"paused" if self._paused else "running"}')
 
     @property
     def now(self) -> float:

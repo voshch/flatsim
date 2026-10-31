@@ -5,6 +5,7 @@ dependencies = [
     "attrs",
     "numpy",
     "pyb2d3",
+    "warp-lang",
 ]
 dynamic = ["description", "license", "maintainers", "scripts"]
 
