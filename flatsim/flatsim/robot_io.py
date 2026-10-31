@@ -19,7 +19,7 @@ import tf2_msgs.msg
 from flatsim.drive import Axis, DriveModel
 from flatsim.sensors import RayPlan, camera_cloud, camera_grid, camera_reach, fan, imu_acceleration, lidar_cloud, ray_plan, ring_slopes, scan_ranges
 from flatsim.urdf import frame_offset, frame_rotation, movable_joints, sensor_block
-from flatsim.world import FlatWorld, RobotState, ScanSpec, Touch, Twist2D
+from flatsim.world import RobotState, ScanSpec, Touch, Twist2D
 from flatsim_msgs.msg import DriveModel as DriveModelMsg
 from flatsim_msgs.msg import SensorSpec
 
@@ -28,6 +28,7 @@ if typing.TYPE_CHECKING:
     import rclpy.publisher
     import rclpy.subscription
 
+    from flatsim.physics import World
     from flatsim_msgs.srv import SpawnRobot
 
 DEFAULT_TF_TOPIC = '/tf'
@@ -217,28 +218,32 @@ class RobotIO:
         joint_state.header.stamp = stamp
         return joint_state
 
-    def _publish_rays(self, world: FlatWorld, rays: _Rays, stamp: builtin_interfaces.msg.Time) -> None:
-        distance = world.cast(self.name, rays.spec).take(rays.plan.beam).first(rays.plan.slope)
+    def _publish_rays(self, rays: _Rays, distance: np.ndarray, stamp: builtin_interfaces.msg.Time) -> None:
         if rays.scan is not None:
             rays.scan.publisher.publish(_laser_scan(rays, scan_ranges(distance[-1], rays.plan.offset[-1], rays.far), rays.scan.frame_id, stamp))
         if rays.cloud is not None:
             points = (camera_cloud if rays.camera else lidar_cloud)(distance[:-1], rays.plan.offset[:-1], rays.near, rays.far)
             rays.cloud.publisher.publish(_point_cloud(points, rays.cloud.frame_id, stamp))
 
-    def publish_transforms(self, world: FlatWorld, stamp: builtin_interfaces.msg.Time) -> None:
+    def publish_transforms(self, world: World, stamp: builtin_interfaces.msg.Time) -> None:
         self.tf.publish(self._transforms(world.robot_state(self.name), stamp))
 
-    def publish(self, world: FlatWorld, stamp: builtin_interfaces.msg.Time, every: bool) -> None:
-        """Publish the robot's state and its due sensors (all of them with `every`) at the world's time."""
+    def due_rays(self, now: float, every: bool) -> list[_Rays]:
+        """Ray sensors due at `now` (all of them with `every`), marked as published."""
+        due = [rays for rays in self.rays if every or rays.rate.due(now)]
+        for rays in due:
+            rays.rate.last_stamp = now
+        return due
+
+    def publish(self, world: World, stamp: builtin_interfaces.msg.Time, every: bool, cast: list[tuple[_Rays, np.ndarray]]) -> None:
+        """Publish the robot's state, its cast ray sensors and its other due sensors (all of them with `every`) at the world's time."""
         now = world.time
         state = world.robot_state(self.name)
         self.tf.publish(self._transforms(state, stamp))
         self.odom.publish(self._odometry(state, stamp))
         self.joint_states.publish(self._joint_state(stamp))
-        for rays in self.rays:
-            if every or rays.rate.due(now):
-                rays.rate.last_stamp = now
-                self._publish_rays(world, rays, stamp)
+        for rays, distance in cast:
+            self._publish_rays(rays, distance, stamp)
         for imu in self.imus:
             if every or imu.rate.due(now):
                 imu.rate.last_stamp = now

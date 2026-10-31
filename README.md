@@ -1,9 +1,9 @@
 # flatsim
 
 A 2D physics simulator for mobile robots on ROS 2: planar robots, walls,
-obstacles and pedestrians on Box2D 3 (`pyb2d3`), with ray-cast sensors and no
-renderer. One server process owns sim time and steps one world. It is driven
-entirely through ROS services and topics.
+obstacles and pedestrians on Box2D 3 (`pyb2d3`) or on Warp, with ray-cast sensors
+and no renderer. One server process owns sim time and steps one world. It is
+driven entirely through ROS services and topics.
 
 ## Layout
 
@@ -12,6 +12,8 @@ flatsim/                     this repository
 |-- flatsim/                 ament_python package
 |   |-- flatsim/
 |   |   |-- world.py         FlatWorld: bodies, outlines, boxes, discs, levels, stepping, batched ray casts, contacts
+|   |   |-- warp_world.py    WarpWorld: the same API with bodies, contacts and ray casts on a Warp device
+|   |   |-- physics.py       the engine choice, make_world
 |   |   |-- drive.py         DriveModel: per-axis velocity and acceleration limits, gain, lag, traction, pivot
 |   |   |-- sensors.py       beam fans, lidar and depth camera point clouds, IMU acceleration
 |   |   |-- urdf.py          link offsets, movable joints and gazebo sensor blocks read from a URDF string
@@ -28,12 +30,12 @@ flatsim/                     this repository
 ```
 mkdir -p ws/src && cd ws/src && git clone https://github.com/voshch/flatsim.git && cd ..
 rosdep install --from-paths src --ignore-src -y
-python3 -m pip install --break-system-packages attrs pyb2d3
+python3 -m pip install --break-system-packages attrs pyb2d3 warp-lang
 colcon build && source install/setup.bash
 ros2 launch flatsim flatsim.launch.py
 ```
 
-`pyb2d3` has no rosdep key, so pip installs it next to the system packages
+`pyb2d3` and `warp-lang` have no rosdep key, so pip installs them next to the system packages
 (or into the virtual environment your ROS Python uses).
 
 In a second shell, put a wall and a robot into the world and drive it:
@@ -70,6 +72,19 @@ Parameters of the `flatsim` node (launch arguments of the same names):
 | `real_time_factor` | `1.0` | Pace while unpaused, `0` = unbounded. Can be set while running. |
 | `paused` | `false` | Start paused. Fixed at start, changed through `control_world`. |
 | `dynamics` | `rigid` | `rigid`: walls and obstacles stop or push a robot, pedestrian discs touch it without pushing. `kinematic`: it passes through, contacts are still published. Fixed at start. |
+| `physics` | `auto` | `box2d`, `warp`, or `auto`: `warp` when a CUDA device is visible, else `box2d`. Fixed at start. |
+
+## Physics
+
+`box2d` steps the world on the CPU. `warp` runs physics and every ray cast on a
+CUDA device, or on the CPU without one. It shares the API of `box2d` and
+the test suite runs against both, with tests/test_parity.py holding Warp to
+fixed tolerances against Box2D on the same scenes: within 2 cm on wall contact
+and 3 cm on sliding and shoving, and 0.1 mm on scans from one pose. Runs are not
+bit-equal between the two, a run repeats exactly on one device with one engine.
+Warp keeps the nearest 16 hits per beam in `cast` and 64 contact manifolds per robot. The
+first start on a machine compiles the kernels, about a minute, and later starts
+load them from `~/.cache/warp`.
 
 ## World
 
@@ -155,11 +170,12 @@ simulated.
 
 ## Library
 
-The world is usable without ROS: `flatsim.world`, `flatsim.drive`,
-`flatsim.sensors` and `flatsim.urdf` import only `attrs`, `numpy` and
-`pyb2d3`.
+The world is usable without ROS: `flatsim.world`, `flatsim.warp_world`,
+`flatsim.physics`, `flatsim.drive`, `flatsim.sensors` and `flatsim.urdf` import
+only `attrs`, `numpy`, `pyb2d3` and `warp`.
 
-- `FlatWorld(dt, dynamics)` steps in whole `dt` steps. `advance(to)` takes
+- `make_world(dt, dynamics, physics)` returns a `FlatWorld` or a `WarpWorld`,
+  which share what follows. They step in whole `dt` steps. `advance(to)` takes
   every step that fits before `to` and returns how many it took.
 - `add_outline`, `add_box`, `add_disc`, `move`, `remove`, `set_levels`,
   `add_robot`, `command`, `set_robot_pose` mirror the services above.
@@ -167,6 +183,8 @@ The world is usable without ROS: `flatsim.world`, `flatsim.drive`,
   so one cast yields a planar scan and every ring of a 3D lidar. The fan is
   intersected with the world's segments and circles in one batch, each beam
   tested only against the shapes its direction can reach.
+  `first_many` takes every (robot, fan, beam, slope) at once and returns the
+  `first` distances, one launch on Warp, which stops each ray at its first hit.
   `RayHits.first(slope)` is the nearest hit per beam at that elevation, with
   downward beams returning the level floor. `scan` is the planar shorthand.
   `sensors.ray_plan` lays the rays of a tilted sensor onto one such fan and

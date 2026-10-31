@@ -358,6 +358,44 @@ def _new_world() -> b2.World:
     return world
 
 
+def _robot_hull(footprint: Sequence[Point] | None) -> b2.Hull | None:
+    """Convex hull of a footprint, None when it has fewer than 3 or more than _MAX_HULL corners."""
+    hull = b2.compute_hull(np.asarray(footprint, dtype=np.float32)) if footprint is not None and len(footprint) >= 3 else None
+    return hull if hull is not None and 3 <= hull.count <= _MAX_HULL else None
+
+
+@attrs.frozen
+class _RobotMass:
+    """A robot body of density 1: polygon vertices and outward normals about the body origin (None for a disc), center of mass, mass and rotational inertia about the center."""
+
+    vertices: np.ndarray | None
+    normals: np.ndarray | None
+    center: Point
+    mass: float
+    inertia: float
+
+
+def _robot_mass(footprint: Sequence[Point] | None, radius: float) -> _RobotMass:
+    hull = _robot_hull(footprint)
+    world = _new_world()
+    body = world.create_dynamic_body(position=(0.0, 0.0))
+    vertices = normals = None
+    if hull is not None:
+        polygon = b2.polygon(hull=hull)
+        body.create_polygon_shape(b2.shape_def(density=1.0), polygon)
+        vertices = np.asarray(polygon.vertices, dtype=np.float64).reshape(-1, 2)
+        normals = np.asarray(polygon.normals, dtype=np.float64).reshape(-1, 2)
+    else:
+        circle = b2.Circle()
+        circle.center = (0.0, 0.0)
+        circle.radius = radius
+        body.create_circle_shape(b2.shape_def(density=1.0), circle)
+    center = body.local_center_of_mass()
+    mass = _RobotMass(vertices, normals, (center.x, center.y), body.mass, body.rotational_inertia())
+    world.destroy()
+    return mass
+
+
 class FlatWorld:
     """One Box2D world per level: static outlines, kinematic boxes and discs, velocity-driven robots."""
 
@@ -599,9 +637,7 @@ class FlatWorld:
     ) -> None:
         """Robot body from the convex hull of `footprint`, a disc of `radius` without one, `height` tall above z."""
         self.remove(name)
-        hull = b2.compute_hull(np.asarray(footprint, dtype=np.float32)) if footprint is not None and len(footprint) >= 3 else None
-        if hull is not None and not 3 <= hull.count <= _MAX_HULL:
-            hull = None
+        hull = _robot_hull(footprint)
         level = self.level(z)
         body, shape = self._robot_body(name, level, hull, float(radius), (float(pose[0]), float(pose[1])), float(pose[2]))
         corners = _ccw(np.asarray(shape.cast().polygon.vertices, dtype=np.float64).reshape(-1, 2)) if hull is not None else None
@@ -760,6 +796,10 @@ class FlatWorld:
         hi[row, column] = extents[index, 1]
         floor = self._levels[self.level(robot.z)] if self._levels else 0.0
         return RayHits(distance, lo, hi, floor - (robot.z + spec.height))
+
+    def first_many(self, requests: Sequence[tuple[str, ScanSpec, np.ndarray, np.ndarray]]) -> list[np.ndarray]:
+        """Horizontal distance to the first hit of each ray of every (robot, fan, beam per ray, rise per meter per ray)."""
+        return [self.cast(name, spec).take(beam).first(slope) for name, spec, beam, slope in requests]
 
     def scan(self, name: str, spec: ScanSpec) -> np.ndarray:
         """Ranges of one fan from robot `name`, inf where no entity spans the sensor height within range_max."""

@@ -4,12 +4,23 @@ from __future__ import annotations
 
 import math
 
+import functools
+import typing
+
 import attrs
 import numpy as np
 import pytest
 
 from flatsim.drive import Axis, DriveModel
+from flatsim.physics import Physics, make_world
 from flatsim.world import Dynamics, FlatWorld, ScanSpec
+
+if typing.TYPE_CHECKING:
+    from collections.abc import Callable
+
+    from flatsim.physics import World
+
+    Make = Callable[..., World]
 
 DT = 1.0 / 30.0
 FREE = DriveModel(linear=Axis(-1.0, 1.0), lateral=Axis(0.0, 0.0), angular=Axis(-2.0, 2.0))
@@ -20,16 +31,21 @@ AHEAD = ScanSpec(mount=(0.0, 0.0, 0.0), angle_min=0.0, angle_increment=0.1, beam
 SQUARE = [(0.2, 0.2), (0.2, -0.2), (-0.2, -0.2), (-0.2, 0.2)]
 
 
-def _wall(world: FlatWorld, name: str, x: float, z: tuple[float, float] = (0.0, 2.5)) -> None:
+@pytest.fixture(params=[Physics.BOX2D, Physics.WARP], ids=lambda physics: physics.value)
+def make(request: pytest.FixtureRequest) -> Make:
+    return functools.partial(make_world, physics=request.param)
+
+
+def _wall(world: World, name: str, x: float, z: tuple[float, float] = (0.0, 2.5)) -> None:
     world.add_outline(name, [[(x, -3.0), (x, 3.0)]], z)
 
 
-def _ahead(world: FlatWorld, name: str = 'robot', height: float = 0.0) -> float:
+def _ahead(world: World, name: str = 'robot', height: float = 0.0) -> float:
     return float(world.scan(name, attrs.evolve(AHEAD, height=height))[0])
 
 
-def test_scan_origin_and_heading_follow_the_mount():
-    world = FlatWorld(DT)
+def test_scan_origin_and_heading_follow_the_mount(make: Make):
+    world = make(DT)
     _wall(world, 'east', 2.0)
     world.add_outline('north', [[(-3.0, 1.0), (3.0, 1.0)]], (0.0, 2.5))
     world.add_robot('robot', (0.0, 0.0, 0.0), 0.0, FREE)
@@ -39,8 +55,8 @@ def test_scan_origin_and_heading_follow_the_mount():
     assert world.scan('robot', left)[0] == pytest.approx(0.75, abs=1e-4)
 
 
-def test_robot_sees_and_hits_only_its_own_level():
-    world = FlatWorld(DT)
+def test_robot_sees_and_hits_only_its_own_level(make: Make):
+    world = make(DT)
     world.set_levels([0.0, 3.0])
     _wall(world, 'ground', 2.0, (0.0, 2.5))
     _wall(world, 'upper', 1.0, (3.0, 5.5))
@@ -61,8 +77,8 @@ def test_robot_sees_and_hits_only_its_own_level():
     assert world.robot_state('robot').x == pytest.approx(0.8, abs=0.02)
 
 
-def test_wall_spanning_two_levels_is_seen_from_both():
-    world = FlatWorld(DT)
+def test_wall_spanning_two_levels_is_seen_from_both(make: Make):
+    world = make(DT)
     world.set_levels([0.0, 3.0])
     _wall(world, 'shaft', 2.0, (0.0, 6.0))
     world.add_robot('robot', (0.0, 0.0, 0.0), 0.0, FREE)
@@ -71,8 +87,8 @@ def test_wall_spanning_two_levels_is_seen_from_both():
     assert _ahead(world) == pytest.approx(2.0, abs=1e-4)
 
 
-def test_levels_set_after_spawn_refilter_existing_shapes():
-    world = FlatWorld(DT)
+def test_levels_set_after_spawn_refilter_existing_shapes(make: Make):
+    world = make(DT)
     _wall(world, 'upper', 1.0, (3.0, 5.5))
     world.add_robot('robot', (0.0, 0.0, 0.0), 0.0, FREE)
     assert _ahead(world, height=3.5) == pytest.approx(1.0, abs=1e-4)
@@ -80,8 +96,8 @@ def test_levels_set_after_spawn_refilter_existing_shapes():
     assert math.isinf(_ahead(world, height=3.5))
 
 
-def test_levels_changed_mid_run_keep_robots_and_walking_discs_moving():
-    world = FlatWorld(DT, Dynamics.KINEMATIC)
+def test_levels_changed_mid_run_keep_robots_and_walking_discs_moving(make: Make):
+    world = make(DT, Dynamics.KINEMATIC)
     world.add_robot('robot', (0.0, 0.0, 0.0), 0.0, FREE)
     world.add_disc('ped', 0.3, (8.0, 0.0), (-0.04, 0.01))
     world.move('ped', (8.0, 0.0, 0.0), velocity=(-1.0, 0.0))
@@ -98,8 +114,8 @@ def test_levels_changed_mid_run_keep_robots_and_walking_discs_moving():
     assert _ahead(world) == pytest.approx(5.7, abs=1e-3)
 
 
-def test_scan_sees_only_entities_spanning_the_sensor_height():
-    world = FlatWorld(DT)
+def test_scan_sees_only_entities_spanning_the_sensor_height(make: Make):
+    world = make(DT)
     world.add_robot('robot', (0.0, 0.0, 0.0), 0.0, FREE)
     world.add_box('crate', (0.2, 2.0), (1.0, 0.0, 0.0), (0.0, 0.3))
     world.add_box('sign', (0.2, 2.0), (2.0, 0.0, 0.0), (1.2, 2.0))
@@ -116,8 +132,8 @@ def test_scan_sees_only_entities_spanning_the_sensor_height():
     assert _ahead(world, height=0.25) == pytest.approx(0.9, abs=1e-4)
 
 
-def test_cast_lists_every_entity_on_a_beam_nearest_first_with_its_extent():
-    world = FlatWorld(DT)
+def test_cast_lists_every_entity_on_a_beam_nearest_first_with_its_extent(make: Make):
+    world = make(DT)
     world.add_robot('robot', (0.0, 0.0, 0.0), 0.5, FREE)
     world.add_box('wall', (0.2, 6.0), (3.1, 0.0, 0.0), (-0.5, 2.5))
     world.add_disc('ped', 0.3, (2.0, 0.0), (0.5, 2.3))
@@ -139,8 +155,8 @@ def test_cast_lists_every_entity_on_a_beam_nearest_first_with_its_extent():
     assert np.isinf(empty.first()).all()
 
 
-def test_ground_slab_neither_blocks_a_ray_nor_stops_a_rigid_robot():
-    world = FlatWorld(DT)
+def test_ground_slab_neither_blocks_a_ray_nor_stops_a_rigid_robot(make: Make):
+    world = make(DT)
     world.add_box('cabin_floor', (2.0, 2.0), (1.5, 0.0, 0.0), (-0.04, 0.01))
     world.add_box('upper_cabin_floor', (2.0, 2.0), (1.5, 0.0, 0.0), (2.96, 3.01))
     world.add_robot('robot', (0.0, 0.0, 0.0), 0.0, FREE, footprint=SQUARE)
@@ -165,8 +181,8 @@ def test_ground_slab_neither_blocks_a_ray_nor_stops_a_rigid_robot():
     assert math.isinf(_ahead(world))
 
 
-def test_wall_ending_just_above_the_next_floor_stays_on_the_lower_level_only():
-    world = FlatWorld(DT)
+def test_wall_ending_just_above_the_next_floor_stays_on_the_lower_level_only(make: Make):
+    world = make(DT)
     world.set_levels([0.0, 3.0])
     _wall(world, 'wall', 2.0, (0.0, 3.01))
     world.add_robot('robot', (0.0, 0.0, 0.0), 0.0, FREE)
@@ -175,8 +191,8 @@ def test_wall_ending_just_above_the_next_floor_stays_on_the_lower_level_only():
     assert math.isinf(_ahead(world))
 
 
-def test_hundred_stacked_robots_each_see_and_hit_only_the_wall_of_their_level():
-    world = FlatWorld(DT)
+def test_hundred_stacked_robots_each_see_and_hit_only_the_wall_of_their_level(make: Make):
+    world = make(DT)
     world.set_levels([3.0 * i for i in range(100)])
     for i in range(100):
         _wall(world, f'wall{i}', 2.0 + 0.01 * i, (3.0 * i, 3.0 * i + 2.5))
@@ -190,8 +206,8 @@ def test_hundred_stacked_robots_each_see_and_hit_only_the_wall_of_their_level():
     assert [world.contacts(f'robot{i}')[0][0] for i in range(100)] == [f'wall{i}' for i in range(100)]
 
 
-def test_box_blocks_a_ray_until_moved_or_removed():
-    world = FlatWorld(DT)
+def test_box_blocks_a_ray_until_moved_or_removed(make: Make):
+    world = make(DT)
     world.add_robot('robot', (0.0, 0.0, 0.0), 0.0, FREE)
     world.add_box('door', (0.1, 2.0), (1.5, 0.0, 0.0), (0.0, 2.0))
     assert _ahead(world) == pytest.approx(1.45, abs=1e-4)
@@ -205,8 +221,8 @@ def test_box_blocks_a_ray_until_moved_or_removed():
     assert math.isinf(_ahead(world))
 
 
-def test_disc_keeps_its_velocity_between_moves():
-    world = FlatWorld(DT)
+def test_disc_keeps_its_velocity_between_moves(make: Make):
+    world = make(DT)
     world.add_robot('robot', (0.0, 0.0, 0.0), 0.0, FREE)
     world.add_disc('ped', 0.3, (6.0, 0.0), (0.0, 1.8))
     assert _ahead(world) == pytest.approx(5.7, abs=1e-4)
@@ -215,8 +231,8 @@ def test_disc_keeps_its_velocity_between_moves():
     assert _ahead(world) == pytest.approx(3.7, abs=1e-3)
 
 
-def test_command_is_clamped_by_velocity_and_acceleration_limits():
-    world = FlatWorld(DT, Dynamics.KINEMATIC)
+def test_command_is_clamped_by_velocity_and_acceleration_limits(make: Make):
+    world = make(DT, Dynamics.KINEMATIC)
     world.add_robot('robot', (0.0, 0.0, 0.0), 0.0, LIMITED)
     speed, distance = 0.0, 0.0
     for i in range(1, 16):
@@ -238,9 +254,9 @@ def test_command_is_clamped_by_velocity_and_acceleration_limits():
     assert turn == -1.5
 
 
-def test_diff_drive_ignores_lateral_command_and_holonomic_follows_it():
+def test_diff_drive_ignores_lateral_command_and_holonomic_follows_it(make: Make):
     for drive, sideways in ((FREE, 0.0), (HOLONOMIC, 1.0)):
-        world = FlatWorld(DT, Dynamics.KINEMATIC)
+        world = make(DT, Dynamics.KINEMATIC)
         world.add_robot('robot', (0.0, 0.0, math.pi / 2), 0.0, drive)
         world.command('robot', (0.0, 1.0, 0.0))
         world.advance(0.3)
@@ -250,8 +266,8 @@ def test_diff_drive_ignores_lateral_command_and_holonomic_follows_it():
         assert state.y == pytest.approx(0.0, abs=1e-5)
 
 
-def test_command_expires_after_the_timeout():
-    world = FlatWorld(DT, Dynamics.KINEMATIC)
+def test_command_expires_after_the_timeout(make: Make):
+    world = make(DT, Dynamics.KINEMATIC)
     world.add_robot('robot', (0.0, 0.0, 0.0), 0.0, FREE)
     world.command('robot', (1.0, 0.0, 0.0))
     world.advance(FREE.timeout + 2.0)
@@ -260,8 +276,8 @@ def test_command_expires_after_the_timeout():
     assert FREE.timeout - DT <= state.x <= FREE.timeout + 2 * DT
 
 
-def test_non_finite_command_is_dropped():
-    world = FlatWorld(DT, Dynamics.KINEMATIC)
+def test_non_finite_command_is_dropped(make: Make):
+    world = make(DT, Dynamics.KINEMATIC)
     world.add_robot('robot', (0.0, 0.0, 0.0), 0.0, FREE)
     world.command('robot', (0.4, 0.0, 0.0))
     world.command('robot', (math.nan, 0.0, 0.0))
@@ -270,8 +286,8 @@ def test_non_finite_command_is_dropped():
 
 
 @pytest.mark.parametrize(('dynamics', 'stops'), [(Dynamics.RIGID, True), (Dynamics.KINEMATIC, False)])
-def test_wall_stops_a_rigid_robot_and_lets_a_kinematic_one_through(dynamics: Dynamics, stops: bool):
-    world = FlatWorld(DT, dynamics)
+def test_wall_stops_a_rigid_robot_and_lets_a_kinematic_one_through(make: Make, dynamics: Dynamics, stops: bool):
+    world = make(DT, dynamics)
     world.add_outline('wall', [[(2.0, -3.0), (2.1, -3.0), (2.1, 3.0), (2.0, 3.0)]], (0.0, 2.5))
     world.add_robot('robot', (0.0, 0.0, 0.0), 0.0, FREE, footprint=SQUARE)
     for i in range(1, 11):
@@ -286,8 +302,8 @@ def test_wall_stops_a_rigid_robot_and_lets_a_kinematic_one_through(dynamics: Dyn
 
 
 @pytest.mark.parametrize('dynamics', [Dynamics.RIGID, Dynamics.KINEMATIC])
-def test_walking_disc_touches_a_robot_without_pushing_it(dynamics: Dynamics):
-    world = FlatWorld(DT, dynamics)
+def test_walking_disc_touches_a_robot_without_pushing_it(make: Make, dynamics: Dynamics):
+    world = make(DT, dynamics)
     world.add_robot('robot', (0.0, 0.0, 0.0), 0.0, FREE, radius=0.3)
     world.add_disc('ped', 0.3, (-2.0, 0.0), (0.0, 1.8))
     world.move('ped', (-2.0, 0.0, 0.0), velocity=(1.0, 0.0))
@@ -298,8 +314,8 @@ def test_walking_disc_touches_a_robot_without_pushing_it(dynamics: Dynamics):
     assert (state.x, state.y, state.vx) == pytest.approx((0.0, 0.0, 0.0), abs=1e-9)
 
 
-def test_rigid_robot_still_reports_a_disc_after_a_level_change():
-    world = FlatWorld(DT, Dynamics.RIGID)
+def test_rigid_robot_still_reports_a_disc_after_a_level_change(make: Make):
+    world = make(DT, Dynamics.RIGID)
     world.set_levels([0.0, 3.0])
     world.add_robot('robot', (0.0, 0.0, 0.0), 3.0, FREE, radius=0.3)
     world.add_disc('ped', 0.3, (0.0, 0.5), (3.0, 4.8))
@@ -308,8 +324,8 @@ def test_rigid_robot_still_reports_a_disc_after_a_level_change():
     assert world.contacts('robot') == []
 
 
-def test_robots_on_one_level_see_each_other_but_never_themselves():
-    world = FlatWorld(DT)
+def test_robots_on_one_level_see_each_other_but_never_themselves(make: Make):
+    world = make(DT)
     world.set_levels([0.0, 3.0])
     world.add_robot('a', (0.0, 0.0, 0.0), 0.0, FREE, footprint=SQUARE)
     world.add_robot('b', (2.0, 0.0, 0.0), 0.0, FREE, footprint=SQUARE)
@@ -322,8 +338,8 @@ def test_robots_on_one_level_see_each_other_but_never_themselves():
     assert math.isinf(world.scan('a', inside)[0])
 
 
-def test_eighty_robots_touch_and_see_only_the_peers_of_their_level():
-    world = FlatWorld(DT)
+def test_eighty_robots_touch_and_see_only_the_peers_of_their_level(make: Make):
+    world = make(DT)
     world.set_levels([0.0, 3.0])
     for i in range(40):
         world.add_robot(f'a{i}', (0.4 * i, 0.0, 0.0), 0.0, FREE, footprint=SQUARE)
@@ -340,8 +356,8 @@ def test_eighty_robots_touch_and_see_only_the_peers_of_their_level():
     assert _ahead(world, 'b2') == pytest.approx(0.2, abs=1e-4)
 
 
-def test_peer_robot_is_seen_up_to_its_height():
-    world = FlatWorld(DT)
+def test_peer_robot_is_seen_up_to_its_height(make: Make):
+    world = make(DT)
     world.add_robot('a', (0.0, 0.0, 0.0), 0.0, FREE, footprint=SQUARE)
     world.add_robot('b', (2.0, 0.0, 0.0), 0.0, FREE, footprint=SQUARE)
     world.add_robot('tall', (4.0, 0.0, 0.0), 0.0, FREE, footprint=SQUARE, height=1.4)
@@ -353,8 +369,8 @@ def test_peer_robot_is_seen_up_to_its_height():
     assert _ahead(world, 'a', height=0.1) == pytest.approx(3.8, abs=1e-4)
 
 
-def test_acceleration_follows_a_commanded_speed_up_and_vanishes_at_speed():
-    world = FlatWorld(DT, Dynamics.KINEMATIC)
+def test_acceleration_follows_a_commanded_speed_up_and_vanishes_at_speed(make: Make):
+    world = make(DT, Dynamics.KINEMATIC)
     world.add_robot('robot', (0.0, 0.0, 0.0), 0.0, LIMITED)
     assert (world.robot_state('robot').ax, world.robot_state('robot').ay) == (0.0, 0.0)
     for i in range(1, 7):
@@ -375,8 +391,8 @@ def test_acceleration_follows_a_commanded_speed_up_and_vanishes_at_speed():
 
 
 @pytest.mark.parametrize(('dynamics', 'tolerance'), [(Dynamics.RIGID, 0.05), (Dynamics.KINEMATIC, 1e-9)])
-def test_steady_turn_leaves_only_the_centripetal_acceleration(dynamics: Dynamics, tolerance: float):
-    world = FlatWorld(DT, dynamics)
+def test_steady_turn_leaves_only_the_centripetal_acceleration(make: Make, dynamics: Dynamics, tolerance: float):
+    world = make(DT, dynamics)
     world.add_robot('robot', (0.0, 0.0, 0.0), 0.0, HOLONOMIC, radius=0.3)
     for i in range(1, 31):
         world.command('robot', (0.6, 0.0, 1.5))
@@ -395,8 +411,8 @@ def test_steady_turn_leaves_only_the_centripetal_acceleration(dynamics: Dynamics
     assert (world.robot_state('robot').ax, world.robot_state('robot').ay) == (0.0, 0.0)
 
 
-def test_rigid_robot_reports_the_wall_it_rests_against():
-    world = FlatWorld(DT, Dynamics.RIGID)
+def test_rigid_robot_reports_the_wall_it_rests_against(make: Make):
+    world = make(DT, Dynamics.RIGID)
     world.add_outline('wall', [[(2.0, -3.0), (2.1, -3.0), (2.1, 3.0), (2.0, 3.0)]], (0.0, 2.5))
     world.add_disc('ped', 0.3, (0.0, 5.0), (0.0, 1.8))
     world.add_robot('robot', (0.0, 0.0, 0.0), 0.0, FREE, footprint=SQUARE)
@@ -406,7 +422,7 @@ def test_rigid_robot_reports_the_wall_it_rests_against():
         world.advance(i * 0.4)
     ((name, point, normal),) = world.contacts('robot')
     assert name == 'wall'
-    assert point == pytest.approx((2.0, 0.0), abs=0.01)
+    assert point == pytest.approx((2.0, 0.0), abs=0.02)
     assert normal == pytest.approx((1.0, 0.0), abs=1e-6)
     world.advance(world.time + 2.0)
     assert [name for name, _, _ in world.contacts('robot')] == ['wall']
@@ -414,8 +430,8 @@ def test_rigid_robot_reports_the_wall_it_rests_against():
     assert world.contacts('robot') == []
 
 
-def test_kinematic_robot_reports_what_its_shape_overlaps():
-    world = FlatWorld(DT, Dynamics.KINEMATIC)
+def test_kinematic_robot_reports_what_its_shape_overlaps(make: Make):
+    world = make(DT, Dynamics.KINEMATIC)
     world.set_levels([0.0, 3.0])
     world.add_box('door', (0.1, 2.0), (1.0, 0.0, 0.0), (0.0, 2.0))
     world.add_box('upstairs', (0.1, 2.0), (0.3, 0.0, 0.0), (3.0, 5.0))
@@ -446,8 +462,8 @@ def test_kinematic_robot_reports_what_its_shape_overlaps():
     assert (touching[-1] + 1) * DT == pytest.approx(1.35, abs=DT)
 
 
-def test_advance_takes_only_whole_steps_and_rebases_on_a_clock_that_ran_backwards():
-    world = FlatWorld(DT, Dynamics.KINEMATIC)
+def test_advance_takes_only_whole_steps_and_rebases_on_a_clock_that_ran_backwards(make: Make):
+    world = make(DT, Dynamics.KINEMATIC)
     world.add_robot('robot', (0.0, 0.0, 0.0), 0.0, FREE)
     world.command('robot', (1.0, 0.0, 0.0))
     assert world.advance(2.5 * DT) == 2
