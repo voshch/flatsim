@@ -18,13 +18,13 @@ Pose2D = tuple[float, float, float]
 Twist2D = tuple[float, float, float]
 Touch = tuple[str, Point, Point]
 
-MAX_LEVELS = 32
-MAX_ROBOTS = 32
 ROBOT_HEIGHT = 0.5
 GROUND_SLAB = 0.05
 
-_ALL = 0xFFFFFFFFFFFFFFFF
-_LEVELS = (1 << MAX_LEVELS) - 1
+_WALL = 1
+_DISC = 2
+_ROBOT = 4
+_QUERY = 8
 _LEVEL_EPS = 1e-3
 _STEP_EPS = 1e-4
 _LINEAR_SLOP = 0.005  # Box2D returns an invalid shape for a segment no longer than this
@@ -94,27 +94,29 @@ class RobotState:
 
 @attrs.define
 class _Entity:
-    body: b2.Body
-    shapes: list[b2.Shape]
     z: tuple[float, float]
     segments: np.ndarray | None = None
     corners: np.ndarray | None = None
     radius: float = 0.0
     pose: Pose2D = (0.0, 0.0, 0.0)
+    velocity: Point = (0.0, 0.0)
     drifting: bool = False
+    levels: range = range(0)
+    bodies: list[b2.Body] = attrs.field(factory=list)
+    shapes: list[b2.Shape] = attrs.field(factory=list)
 
 
 @attrs.define
 class _Robot:
     body: b2.Body
     shape: b2.Shape
+    hull: b2.Hull | None
     corners: np.ndarray | None
     radius: float
-    slot: int
+    level: int
     z: float
     height: float
     drive: DriveModel
-    ray_mask: int = 0
     command: Twist2D = (0.0, 0.0, 0.0)
     setpoint: Twist2D = (0.0, 0.0, 0.0)
     command_time: float = -math.inf
@@ -124,17 +126,19 @@ class _Robot:
 
 @attrs.frozen
 class _Primitives:
-    """Segments (two-sided or polygon entry edges) and circles in world coordinates, each with its owner index and filter bits."""
+    """Segments (two-sided or polygon entry edges) and circles in world coordinates, each with its owner index and the first and last level it stands on."""
 
     start: np.ndarray
     end: np.ndarray
     one_sided: np.ndarray
     segment_owner: np.ndarray
-    segment_bits: np.ndarray
+    segment_first: np.ndarray
+    segment_last: np.ndarray
     center: np.ndarray
     radius: np.ndarray
     circle_owner: np.ndarray
-    circle_bits: np.ndarray
+    circle_first: np.ndarray
+    circle_last: np.ndarray
 
 
 def _ccw(corners: np.ndarray) -> np.ndarray:
@@ -147,8 +151,8 @@ def _placed(corners: np.ndarray, transform: b2.Transform) -> np.ndarray:
     return corners @ np.array([[cos, sin], [-sin, cos]]) + (transform.p.x, transform.p.y)
 
 
-def _primitives(segments: list[tuple[np.ndarray, bool, int, int]], circles: list[tuple[np.ndarray, float, int, int]]) -> _Primitives:
-    """Pack (points, one sided, owner, bits) segment groups and (center, radius, owner, bits) circles."""
+def _primitives(segments: list[tuple[np.ndarray, bool, int, range]], circles: list[tuple[np.ndarray, float, int, range]]) -> _Primitives:
+    """Pack (points, one sided, owner, levels) segment groups and (center, radius, owner, levels) circles."""
     counts = [len(points) for points, _, _, _ in segments]
     stacked = np.concatenate([points for points, _, _, _ in segments]) if segments else np.zeros((0, 2, 2))
     return _Primitives(
@@ -156,11 +160,13 @@ def _primitives(segments: list[tuple[np.ndarray, bool, int, int]], circles: list
         end=stacked[:, 1],
         one_sided=np.repeat(np.array([one for _, one, _, _ in segments], dtype=bool), counts),
         segment_owner=np.repeat(np.array([owner for _, _, owner, _ in segments], dtype=np.intp), counts),
-        segment_bits=np.repeat(np.array([bits for _, _, _, bits in segments], dtype=np.uint64), counts),
+        segment_first=np.repeat(np.array([levels.start for _, _, _, levels in segments], dtype=np.intp), counts),
+        segment_last=np.repeat(np.array([levels.stop - 1 for _, _, _, levels in segments], dtype=np.intp), counts),
         center=np.array([center for center, _, _, _ in circles], dtype=np.float64).reshape(-1, 2),
         radius=np.array([radius for _, radius, _, _ in circles], dtype=np.float64),
         circle_owner=np.array([owner for _, _, owner, _ in circles], dtype=np.intp),
-        circle_bits=np.array([bits for _, _, _, bits in circles], dtype=np.uint64),
+        circle_first=np.array([levels.start for _, _, _, levels in circles], dtype=np.intp),
+        circle_last=np.array([levels.stop - 1 for _, _, _, levels in circles], dtype=np.intp),
     )
 
 
@@ -195,14 +201,14 @@ def _beam_pairs(start: np.ndarray, span: np.ndarray, theta0: float, increment: f
 _NO_HITS = (np.zeros(0, dtype=np.intp), np.zeros(0), np.zeros(0, dtype=np.intp))
 
 
-def _segment_hits(primitives: _Primitives, origin: np.ndarray, rays: np.ndarray, theta0: float, increment: float, reach: float, mask: np.uint64) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+def _segment_hits(primitives: _Primitives, origin: np.ndarray, rays: np.ndarray, theta0: float, increment: float, reach: float, level: int, caster: int) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """(beam, fraction, owner) of every segment crossing, polygon edges counting only where a ray enters."""
     start = primitives.start - origin
     span = primitives.end - primitives.start
     length = (span**2).sum(axis=1)
     along = np.clip(-(start * span).sum(axis=1) / np.where(length > 0.0, length, 1.0), 0.0, 1.0)
     closest = start + along[:, None] * span
-    keep = np.flatnonzero(((primitives.segment_bits & mask) != 0) & ((closest**2).sum(axis=1) <= reach * reach))
+    keep = np.flatnonzero((primitives.segment_first <= level) & (level <= primitives.segment_last) & (primitives.segment_owner != caster) & ((closest**2).sum(axis=1) <= reach * reach))
     if not len(keep):
         return _NO_HITS
     start, span, end = start[keep], span[keep], start[keep] + span[keep]
@@ -218,11 +224,11 @@ def _segment_hits(primitives: _Primitives, origin: np.ndarray, rays: np.ndarray,
     return beam[hit], t[hit], primitives.segment_owner[keep][which][hit]
 
 
-def _circle_hits(primitives: _Primitives, origin: np.ndarray, rays: np.ndarray, theta0: float, increment: float, reach: float, mask: np.uint64) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+def _circle_hits(primitives: _Primitives, origin: np.ndarray, rays: np.ndarray, theta0: float, increment: float, reach: float, level: int, caster: int) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """(beam, fraction, owner) where a ray enters a circle, none from inside one."""
     rel = primitives.center - origin
     gap = np.sqrt((rel**2).sum(axis=1))
-    keep = np.flatnonzero(((primitives.circle_bits & mask) != 0) & (gap > primitives.radius) & (gap - primitives.radius <= reach))
+    keep = np.flatnonzero((primitives.circle_first <= level) & (level <= primitives.circle_last) & (primitives.circle_owner != caster) & (gap > primitives.radius) & (gap - primitives.radius <= reach))
     if not len(keep):
         return _NO_HITS
     rel, gap, radius = rel[keep], gap[keep], primitives.radius[keep]
@@ -341,16 +347,26 @@ def _spaced(ring: Sequence[Point]) -> list[Point]:
     return kept
 
 
+_WALL_FILTER = b2.make_filter(category_bits=_WALL, mask_bits=_WALL | _DISC | _ROBOT | _QUERY)
+_DISC_FILTER = b2.make_filter(category_bits=_DISC, mask_bits=_WALL | _DISC | _QUERY)
+_ROBOT_FILTER = b2.make_filter(category_bits=_ROBOT, mask_bits=_WALL | _ROBOT | _QUERY)
+
+
+def _new_world() -> b2.World:
+    world = b2.World(gravity=(0.0, 0.0))
+    world.sleeping_enabled = False
+    return world
+
+
 class FlatWorld:
-    """Box2D world: static outlines, kinematic boxes and discs, velocity-driven robots."""
+    """One Box2D world per level: static outlines, kinematic boxes and discs, velocity-driven robots."""
 
     def __init__(self, dt: float, dynamics: Dynamics = Dynamics.RIGID) -> None:
         if dt <= 0:
             raise ValueError(f'dt must be positive, got {dt}')
         self._dt = dt
         self._dynamics = dynamics
-        self._world = b2.World(gravity=(0.0, 0.0))
-        self._world.sleeping_enabled = False
+        self._worlds = [_new_world()]
         self._levels: list[float] = []
         self._entities: dict[str, _Entity] = {}
         self._robots: dict[str, _Robot] = {}
@@ -359,7 +375,7 @@ class FlatWorld:
         self._names: dict[int, str] = {}
         self._next_uid = 0
         self._static: _Primitives | None = None
-        self._resting: tuple[int, list[tuple[np.ndarray, bool, int, int]]] | None = None
+        self._resting: tuple[int, list[tuple[np.ndarray, bool, int, range]]] | None = None
         self._moving: tuple[tuple[int, int], _Primitives] | None = None
         self._steps = 0
         self._version = 0
@@ -386,28 +402,37 @@ class FlatWorld:
         for z in sorted(floors_z):
             if not levels or z - levels[-1] > _LEVEL_EPS:
                 levels.append(z)
-        if len(levels) > MAX_LEVELS:
-            raise ValueError(f'{len(levels)} levels exceed the {MAX_LEVELS} supported')
+        if levels == self._levels:
+            return
         self._levels = levels
-        for entity in self._entities.values():
-            self._filter_entity(entity)
-        self._filter_robots()
+        old = self._worlds
+        self._worlds = [_new_world() for _ in range(max(1, len(levels)))]
+        for name, entity in self._entities.items():
+            self._place(name, entity)
+        for name, robot in self._robots.items():
+            position, velocity = robot.body.position, robot.body.linear_velocity
+            moving, angle, spin = (velocity.x, velocity.y), robot.body.angle, robot.body.angular_velocity
+            self._rehome(name, robot, self.level(robot.z), (position.x, position.y), angle)
+            robot.body.linear_velocity = moving
+            robot.body.angular_velocity = spin
+        for world in old:
+            world.destroy()
         self._static = None
+        self._version += 1
 
     def level(self, z: float) -> int:
         """Index of the level whose slab contains z."""
         return max(0, bisect.bisect_right(self._levels, z + _LEVEL_EPS) - 1)
 
-    def _level_bits(self, z: tuple[float, float]) -> int:
+    def _span(self, z: tuple[float, float]) -> range:
         """Levels an extent rises more than GROUND_SLAB into, none for a ground slab."""
         if not self._levels:
-            return 1
+            return range(1)
         ceilings = [*self._levels[1:], math.inf]
-        return sum(1 << level for level, (floor, ceiling) in enumerate(zip(self._levels, ceilings, strict=True)) if z[1] > floor + GROUND_SLAB and z[0] < ceiling - GROUND_SLAB)
+        inside = [level for level, (floor, ceiling) in enumerate(zip(self._levels, ceilings, strict=True)) if z[1] > floor + GROUND_SLAB and z[0] < ceiling - GROUND_SLAB]
+        return range(inside[0], inside[-1] + 1) if inside else range(0)
 
-    def _own(self, name: str, shapes: Iterable[b2.Shape]) -> None:
-        for shape in shapes:
-            self._owners[shape.id] = name
+    def _own(self, name: str) -> None:
         self._uids[name] = self._next_uid
         self._names[self._next_uid] = name
         self._next_uid += 1
@@ -426,78 +451,99 @@ class FlatWorld:
         robot = self._robots[name]
         return robot.z, robot.z + robot.height
 
-    def _filter_entity(self, entity: _Entity) -> None:
-        flt = b2.make_filter(category_bits=self._level_bits(entity.z), mask_bits=_LEVELS if entity.corners is None and entity.segments is None else _ALL)
+    def _place(self, name: str, entity: _Entity) -> None:
+        """Bodies of an entity in the world of every level it rises into, a shapeless anchor keeping the pose of one that rises into none."""
+        position = (entity.bodies[0].position.x, entity.bodies[0].position.y) if entity.bodies else (entity.pose[0], entity.pose[1])
+        rotation = b2.Rot(entity.pose[2])
         for shape in entity.shapes:
-            shape.filter = flt
+            del self._owners[shape.id]
+        for body in entity.bodies:
+            body.destroy()
+        entity.levels = self._span(entity.z)
+        entity.bodies, entity.shapes = [], []
+        for level in entity.levels:
+            world = self._worlds[level]
+            if entity.segments is not None:
+                body = world.create_static_body(position=(0.0, 0.0))
+                shape_def = b2.shape_def(filter=_WALL_FILTER)
+                for start, end in entity.segments:
+                    segment = b2.Segment()
+                    segment.point1 = (float(start[0]), float(start[1]))
+                    segment.point2 = (float(end[0]), float(end[1]))
+                    entity.shapes.append(body.create_segment_shape(shape_def, segment))
+            else:
+                body = self._kinematic(world, entity, position, rotation)
+                if entity.corners is not None:
+                    half_x, half_y = entity.corners[2]
+                    shape_def = b2.shape_def(filter=_WALL_FILTER)
+                    entity.shapes.append(body.create_polygon_shape(shape_def, b2.box(float(half_x), float(half_y))))
+                else:
+                    circle = b2.Circle()
+                    circle.center = (0.0, 0.0)
+                    circle.radius = entity.radius
+                    shape_def = b2.shape_def(filter=_DISC_FILTER)
+                    entity.shapes.append(body.create_circle_shape(shape_def, circle))
+            entity.bodies.append(body)
+        if not entity.bodies and entity.segments is None:
+            entity.bodies.append(self._kinematic(self._worlds[0], entity, position, rotation))
+        for shape in entity.shapes:
+            self._owners[shape.id] = name
 
-    def _filter_robots(self) -> None:
-        self._version += 1
-        levels = {name: self.level(robot.z) for name, robot in self._robots.items()}
-        for name, robot in self._robots.items():
-            mask = 1 << levels[name]
-            for other, peer in self._robots.items():
-                if other != name and levels[other] == levels[name]:
-                    mask |= 1 << (MAX_LEVELS + peer.slot)
-            robot.ray_mask = mask
-            robot.shape.filter = b2.make_filter(category_bits=1 << (MAX_LEVELS + robot.slot), mask_bits=mask)
-
-    def _shape_def(self, z: tuple[float, float], mask: int = _ALL) -> b2.ShapeDef:
-        return b2.shape_def(filter=b2.make_filter(category_bits=self._level_bits(z), mask_bits=mask))
+    @staticmethod
+    def _kinematic(world: b2.World, entity: _Entity, position: Point, rotation: b2.Rot) -> b2.Body:
+        body = world.create_kinematic_body(position=position)
+        body.set_transform(b2.Vec2(*position), rotation)
+        if entity.drifting:
+            body.linear_velocity = entity.velocity
+        return body
 
     def add_outline(self, name: str, rings: Sequence[Sequence[Point]], z: tuple[float, float]) -> None:
         """Static obstacle whose closed rings become two-sided segments."""
         self.remove(name)
-        body = self._world.create_static_body(position=(0.0, 0.0))
-        shape_def = self._shape_def(z)
-        shapes: list[b2.Shape] = []
         segments: list[tuple[Point, Point]] = []
         for ring in map(_spaced, rings):
             for i, start in enumerate(ring):
                 end = ring[(i + 1) % len(ring)]
                 if math.dist(start, end) <= _LINEAR_SLOP:
                     continue
-                segment = b2.Segment()
-                segment.point1 = (float(start[0]), float(start[1]))
-                segment.point2 = (float(end[0]), float(end[1]))
-                shapes.append(body.create_segment_shape(shape_def, segment))
                 segments.append(((float(start[0]), float(start[1])), (float(end[0]), float(end[1]))))
-        self._entities[name] = _Entity(body, shapes, z, segments=np.array(segments, dtype=np.float64).reshape(-1, 2, 2))
-        self._own(name, shapes)
+        entity = _Entity(z, segments=np.array(segments, dtype=np.float64).reshape(-1, 2, 2))
+        self._entities[name] = entity
+        self._own(name)
+        self._place(name, entity)
         self._static = None
 
     def add_box(self, name: str, size: Point, pose: Pose2D, z: tuple[float, float]) -> None:
         """Kinematic box of full extents `size`, centered on `pose`."""
         self.remove(name)
-        body = self._world.create_kinematic_body(position=(float(pose[0]), float(pose[1])))
-        body.set_transform(b2.Vec2(float(pose[0]), float(pose[1])), b2.Rot(float(pose[2])))
-        shape = body.create_polygon_shape(self._shape_def(z), b2.box(size[0] / 2.0, size[1] / 2.0))
         half_x, half_y = size[0] / 2.0, size[1] / 2.0
-        self._entities[name] = _Entity(body, [shape], z, corners=np.array([(-half_x, -half_y), (half_x, -half_y), (half_x, half_y), (-half_x, half_y)], dtype=np.float64), pose=(float(pose[0]), float(pose[1]), float(pose[2])))
-        self._own(name, [shape])
+        entity = _Entity(z, corners=np.array([(-half_x, -half_y), (half_x, -half_y), (half_x, half_y), (-half_x, half_y)], dtype=np.float64), pose=(float(pose[0]), float(pose[1]), float(pose[2])))
+        self._entities[name] = entity
+        self._own(name)
+        self._place(name, entity)
 
     def add_disc(self, name: str, radius: float, position: Point, z: tuple[float, float]) -> None:
         """Kinematic disc, the shape of a pedestrian, touching robots without pushing them."""
         self.remove(name)
-        body = self._world.create_kinematic_body(position=(float(position[0]), float(position[1])))
-        circle = b2.Circle()
-        circle.center = (0.0, 0.0)
-        circle.radius = float(radius)
-        shape = body.create_circle_shape(self._shape_def(z, _LEVELS), circle)
-        self._entities[name] = _Entity(body, [shape], z, radius=float(radius))
-        self._own(name, [shape])
+        entity = _Entity(z, radius=float(radius), pose=(float(position[0]), float(position[1]), 0.0))
+        self._entities[name] = entity
+        self._own(name)
+        self._place(name, entity)
 
     def move(self, name: str, pose: Pose2D, velocity: Point = (0.0, 0.0), z: tuple[float, float] | None = None) -> None:
         """Place a box or disc and set the velocity it keeps until the next move."""
         entity = self._entities[name]
-        entity.body.set_transform(b2.Vec2(float(pose[0]), float(pose[1])), b2.Rot(float(pose[2])))
-        entity.body.linear_velocity = (float(velocity[0]), float(velocity[1]))
+        for body in entity.bodies:
+            body.set_transform(b2.Vec2(float(pose[0]), float(pose[1])), b2.Rot(float(pose[2])))
+            body.linear_velocity = (float(velocity[0]), float(velocity[1]))
         entity.pose = (float(pose[0]), float(pose[1]), float(pose[2]))
+        entity.velocity = (float(velocity[0]), float(velocity[1]))
         entity.drifting = velocity[0] != 0.0 or velocity[1] != 0.0
         self._version += 1
         if z is not None and z != entity.z:
             entity.z = z
-            self._filter_entity(entity)
+            if self._span(z) != entity.levels:
+                self._place(name, entity)
 
     def remove(self, name: str) -> bool:
         entity = self._entities.pop(name, None)
@@ -505,15 +551,41 @@ class FlatWorld:
             self._disown(name, entity.shapes)
             if entity.segments is not None:
                 self._static = None
-            entity.body.destroy()
+            for body in entity.bodies:
+                body.destroy()
             return True
         robot = self._robots.pop(name, None)
         if robot is not None:
             self._disown(name, [robot.shape])
             robot.body.destroy()
-            self._filter_robots()
             return True
         return False
+
+    def _robot_body(self, name: str, level: int, hull: b2.Hull | None, radius: float, position: Point, angle: float) -> tuple[b2.Body, b2.Shape]:
+        """Body and shape of a robot in the world of `level`, a polygon from its hull or a disc of `radius`."""
+        world = self._worlds[level]
+        body = world.create_dynamic_body(position=position) if self._dynamics is Dynamics.RIGID else world.create_kinematic_body(position=position)
+        body.set_transform(b2.Vec2(*position), b2.Rot(angle))
+        shape_def = b2.shape_def(density=1.0, filter=_ROBOT_FILTER)
+        material = shape_def.material
+        material.friction = 0.0
+        shape_def.material = material
+        if hull is not None:
+            shape = body.create_polygon_shape(shape_def, b2.polygon(hull=hull))
+        else:
+            circle = b2.Circle()
+            circle.center = (0.0, 0.0)
+            circle.radius = radius
+            shape = body.create_circle_shape(shape_def, circle)
+        self._owners[shape.id] = name
+        return body, shape
+
+    def _rehome(self, name: str, robot: _Robot, level: int, position: Point, angle: float) -> None:
+        """Rebuild a robot's body in the world of `level` at rest."""
+        del self._owners[robot.shape.id]
+        robot.body.destroy()
+        robot.body, robot.shape = self._robot_body(name, level, robot.hull, robot.radius, position, angle)
+        robot.level = level
 
     def add_robot(
         self,
@@ -527,43 +599,31 @@ class FlatWorld:
     ) -> None:
         """Robot body from the convex hull of `footprint`, a disc of `radius` without one, `height` tall above z."""
         self.remove(name)
-        used = {robot.slot for robot in self._robots.values()}
-        slot = next((i for i in range(MAX_ROBOTS) if i not in used), None)
-        if slot is None:
-            raise ValueError(f'more than {MAX_ROBOTS} robots in one world')
-        position = (float(pose[0]), float(pose[1]))
-        body = self._world.create_dynamic_body(position=position) if self._dynamics is Dynamics.RIGID else self._world.create_kinematic_body(position=position)
-        body.set_transform(b2.Vec2(*position), b2.Rot(float(pose[2])))
-        shape_def = b2.shape_def(density=1.0)
-        material = shape_def.material
-        material.friction = 0.0
-        shape_def.material = material
         hull = b2.compute_hull(np.asarray(footprint, dtype=np.float32)) if footprint is not None and len(footprint) >= 3 else None
-        corners: np.ndarray | None = None
-        if hull is not None and 3 <= hull.count <= _MAX_HULL:
-            shape = body.create_polygon_shape(shape_def, b2.polygon(hull=hull))
-            corners = _ccw(np.asarray(shape.cast().polygon.vertices, dtype=np.float64).reshape(-1, 2))
-        else:
-            circle = b2.Circle()
-            circle.center = (0.0, 0.0)
-            circle.radius = float(radius)
-            shape = body.create_circle_shape(shape_def, circle)
-        self._robots[name] = _Robot(body=body, shape=shape, corners=corners, radius=float(radius), slot=slot, z=z, height=height, drive=drive)
-        self._own(name, [shape])
-        self._filter_robots()
+        if hull is not None and not 3 <= hull.count <= _MAX_HULL:
+            hull = None
+        level = self.level(z)
+        body, shape = self._robot_body(name, level, hull, float(radius), (float(pose[0]), float(pose[1])), float(pose[2]))
+        corners = _ccw(np.asarray(shape.cast().polygon.vertices, dtype=np.float64).reshape(-1, 2)) if hull is not None else None
+        self._robots[name] = _Robot(body=body, shape=shape, hull=hull, corners=corners, radius=float(radius), level=level, z=z, height=height, drive=drive)
+        self._own(name)
 
     def set_robot_pose(self, name: str, pose: Pose2D, z: float) -> None:
         """Teleport a robot to rest, switching level when z crosses a floor."""
         robot = self._robots[name]
-        robot.body.set_transform(b2.Vec2(float(pose[0]), float(pose[1])), b2.Rot(float(pose[2])))
-        robot.body.linear_velocity = (0.0, 0.0)
-        robot.body.angular_velocity = 0.0
+        level = self.level(z)
+        if level != robot.level:
+            self._rehome(name, robot, level, (float(pose[0]), float(pose[1])), float(pose[2]))
+        else:
+            robot.body.set_transform(b2.Vec2(float(pose[0]), float(pose[1])), b2.Rot(float(pose[2])))
+            robot.body.linear_velocity = (0.0, 0.0)
+            robot.body.angular_velocity = 0.0
         robot.command = (0.0, 0.0, 0.0)
         robot.setpoint = (0.0, 0.0, 0.0)
         robot.twist = (0.0, 0.0, 0.0)
         robot.acceleration = (0.0, 0.0)
         robot.z = z
-        self._filter_robots()
+        self._version += 1
 
     def command(self, name: str, twist: Twist2D) -> None:
         """Body-frame velocity target, held for the drive timeout of world time."""
@@ -604,7 +664,8 @@ class FlatWorld:
             robot.body.linear_velocity = (cos * vx - sin * vy, sin * vx + cos * vy)
             robot.body.angular_velocity = wz
             robot.twist = (vx, vy, wz)
-        self._world.step(dt, _SUBSTEPS)
+        for world in self._worlds:
+            world.step(dt, _SUBSTEPS)
         self._steps += 1
         if self._dynamics is Dynamics.RIGID:
             for robot, (_, yaw) in zip(self._robots.values(), before, strict=True):
@@ -617,22 +678,22 @@ class FlatWorld:
     def _static_primitives(self) -> _Primitives:
         """Outline segments, rebuilt only when an outline or the levels change."""
         if self._static is None:
-            self._static = _primitives([(entity.segments, False, self._uids[name], self._level_bits(entity.z)) for name, entity in self._entities.items() if entity.segments is not None], [])
+            self._static = _primitives([(entity.segments, False, self._uids[name], entity.levels) for name, entity in self._entities.items() if entity.segments is not None], [])
         return self._static
 
-    def _resting_boxes(self) -> list[tuple[np.ndarray, bool, int, int]]:
+    def _resting_boxes(self) -> list[tuple[np.ndarray, bool, int, range]]:
         """Edges of every box at rest, placed from the pose of its last move and rebuilt only on a change."""
         if self._resting is not None and self._resting[0] == self._version:
             return self._resting[1]
         boxes = [(name, entity, entity.corners) for name, entity in self._entities.items() if entity.corners is not None and not entity.drifting]
-        groups: list[tuple[np.ndarray, bool, int, int]] = []
+        groups: list[tuple[np.ndarray, bool, int, range]] = []
         if boxes:
             corners = np.stack([box_corners for _, _, box_corners in boxes])
             pose = np.array([entity.pose for _, entity, _ in boxes], dtype=np.float64)
             cos, sin = np.cos(pose[:, 2])[:, None], np.sin(pose[:, 2])[:, None]
             placed = np.stack([cos * corners[..., 0] - sin * corners[..., 1] + pose[:, :1], sin * corners[..., 0] + cos * corners[..., 1] + pose[:, 1:2]], axis=-1)
             edges = np.stack([placed, placed[:, _BOX_EDGES]], axis=2)
-            groups = [(edges[i], True, self._uids[name], self._level_bits(entity.z)) for i, (name, entity, _) in enumerate(boxes)]
+            groups = [(edges[i], True, self._uids[name], entity.levels) for i, (name, entity, _) in enumerate(boxes)]
         self._resting = (self._version, groups)
         return groups
 
@@ -642,20 +703,20 @@ class FlatWorld:
         if self._moving is not None and self._moving[0] == key:
             return self._moving[1]
         segments = list(self._resting_boxes())
-        circles: list[tuple[np.ndarray, float, int, int]] = []
+        circles: list[tuple[np.ndarray, float, int, range]] = []
         for name, entity in self._entities.items():
             if entity.corners is not None and entity.drifting:
-                segments.append((_edges_of(_placed(entity.corners, entity.body.transform)), True, self._uids[name], self._level_bits(entity.z)))
+                segments.append((_edges_of(_placed(entity.corners, entity.bodies[0].transform)), True, self._uids[name], entity.levels))
             elif entity.corners is None and entity.segments is None:
-                position = entity.body.position
-                circles.append((np.array((position.x, position.y)), entity.radius, self._uids[name], self._level_bits(entity.z)))
+                position = entity.bodies[0].position
+                circles.append((np.array((position.x, position.y)), entity.radius, self._uids[name], entity.levels))
         for name, robot in self._robots.items():
-            bits = 1 << (MAX_LEVELS + robot.slot)
+            levels = range(robot.level, robot.level + 1)
             if robot.corners is not None:
-                segments.append((_edges_of(_placed(robot.corners, robot.body.transform)), True, self._uids[name], bits))
+                segments.append((_edges_of(_placed(robot.corners, robot.body.transform)), True, self._uids[name], levels))
             else:
                 position = robot.body.position
-                circles.append((np.array((position.x, position.y)), robot.radius, self._uids[name], bits))
+                circles.append((np.array((position.x, position.y)), robot.radius, self._uids[name], levels))
         primitives = _primitives(segments, circles)
         self._moving = (key, primitives)
         return primitives
@@ -671,13 +732,13 @@ class FlatWorld:
         theta0 = yaw + mount_yaw + spec.angle_min
         angles = theta0 + spec.angle_increment * np.arange(spec.beams)
         rays = np.stack([np.cos(angles), np.sin(angles)], axis=1) * spec.range_max
-        mask = np.uint64(robot.ray_mask)
+        caster = self._uids[name]
         found = [
             hits
             for primitives in (self._static_primitives(), self._moving_primitives())
             for hits in (
-                _segment_hits(primitives, origin, rays, theta0, spec.angle_increment, spec.range_max, mask),
-                _circle_hits(primitives, origin, rays, theta0, spec.angle_increment, spec.range_max, mask),
+                _segment_hits(primitives, origin, rays, theta0, spec.angle_increment, spec.range_max, robot.level, caster),
+                _circle_hits(primitives, origin, rays, theta0, spec.angle_increment, spec.range_max, robot.level, caster),
             )
         ]
         beam = np.concatenate([hits[0] for hits in found])
@@ -710,13 +771,15 @@ class FlatWorld:
         margin = _CONTACT_MARGIN if self._dynamics is Dynamics.RIGID else 0.0
         box = robot.body.compute_aabb()
         query = b2.QueryFilter()
-        query.category_bits = (1 << (MAX_LEVELS + robot.slot)) | (1 << self.level(robot.z))
-        query.mask_bits = robot.ray_mask
+        query.category_bits = _QUERY
+        query.mask_bits = _WALL | _DISC | _ROBOT
         found: list[b2.Shape] = []
-        self._world.overlap_aabb(b2.aabb((box.lower_bound.x - margin, box.lower_bound.y - margin), (box.upper_bound.x + margin, box.upper_bound.y + margin)), found.append, query)
+        self._worlds[robot.level].overlap_aabb(b2.aabb((box.lower_bound.x - margin, box.lower_bound.y - margin), (box.upper_bound.x + margin, box.upper_bound.y + margin)), found.append, query)
         core, radius = _core(robot.shape)
         nearest: dict[str, tuple[float, Point, Point]] = {}
         for shape in found:
+            if shape.id == robot.shape.id:
+                continue
             owner = self._owners[shape.id]
             touch = _touch(core, radius, *_core(shape), margin)
             if touch is not None and (owner not in nearest or touch[0] < nearest[owner][0]):

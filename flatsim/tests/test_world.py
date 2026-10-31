@@ -9,7 +9,7 @@ import numpy as np
 import pytest
 
 from flatsim.drive import Axis, DriveModel
-from flatsim.world import MAX_LEVELS, Dynamics, FlatWorld, ScanSpec
+from flatsim.world import Dynamics, FlatWorld, ScanSpec
 
 DT = 1.0 / 30.0
 FREE = DriveModel(linear=Axis(-1.0, 1.0), lateral=Axis(0.0, 0.0), angular=Axis(-2.0, 2.0))
@@ -78,6 +78,24 @@ def test_levels_set_after_spawn_refilter_existing_shapes():
     assert _ahead(world, height=3.5) == pytest.approx(1.0, abs=1e-4)
     world.set_levels([0.0, 3.0])
     assert math.isinf(_ahead(world, height=3.5))
+
+
+def test_levels_changed_mid_run_keep_robots_and_walking_discs_moving():
+    world = FlatWorld(DT, Dynamics.KINEMATIC)
+    world.add_robot('robot', (0.0, 0.0, 0.0), 0.0, FREE)
+    world.add_disc('ped', 0.3, (8.0, 0.0), (-0.04, 0.01))
+    world.move('ped', (8.0, 0.0, 0.0), velocity=(-1.0, 0.0))
+    for i in range(1, 31):
+        world.command('robot', (1.0, 0.0, 0.0))
+        world.advance(i * DT)
+        if i == 10:
+            world.set_levels([0.0, 3.0])
+            assert math.isinf(_ahead(world))
+        if i == 20:
+            world.set_levels([-1.0, 3.0])
+    state = world.robot_state('robot')
+    assert (state.x, state.vx) == pytest.approx((1.0, 1.0), abs=1e-5)
+    assert _ahead(world) == pytest.approx(5.7, abs=1e-3)
 
 
 def test_scan_sees_only_entities_spanning_the_sensor_height():
@@ -157,9 +175,19 @@ def test_wall_ending_just_above_the_next_floor_stays_on_the_lower_level_only():
     assert math.isinf(_ahead(world))
 
 
-def test_more_levels_than_supported_are_rejected():
-    with pytest.raises(ValueError, match=str(MAX_LEVELS)):
-        FlatWorld(DT).set_levels([3.0 * i for i in range(MAX_LEVELS + 1)])
+def test_hundred_stacked_robots_each_see_and_hit_only_the_wall_of_their_level():
+    world = FlatWorld(DT)
+    world.set_levels([3.0 * i for i in range(100)])
+    for i in range(100):
+        _wall(world, f'wall{i}', 2.0 + 0.01 * i, (3.0 * i, 3.0 * i + 2.5))
+        world.add_robot(f'robot{i}', (0.0, 0.0, 0.0), 3.0 * i, FREE, footprint=SQUARE)
+    assert [_ahead(world, f'robot{i}') for i in range(100)] == pytest.approx([2.0 + 0.01 * i for i in range(100)], abs=1e-4)
+    for step in range(1, 12):
+        for i in range(100):
+            world.command(f'robot{i}', (1.0, 0.0, 0.0))
+        world.advance(step * 0.4)
+    assert [world.robot_state(f'robot{i}').x for i in range(100)] == pytest.approx([1.8 + 0.01 * i for i in range(100)], abs=0.02)
+    assert [world.contacts(f'robot{i}')[0][0] for i in range(100)] == [f'wall{i}' for i in range(100)]
 
 
 def test_box_blocks_a_ray_until_moved_or_removed():
@@ -292,6 +320,24 @@ def test_robots_on_one_level_see_each_other_but_never_themselves():
     world.set_robot_pose('b', (2.0, 0.0, 0.0), 0.0)
     assert world.remove('b')
     assert math.isinf(world.scan('a', inside)[0])
+
+
+def test_eighty_robots_touch_and_see_only_the_peers_of_their_level():
+    world = FlatWorld(DT)
+    world.set_levels([0.0, 3.0])
+    for i in range(40):
+        world.add_robot(f'a{i}', (0.4 * i, 0.0, 0.0), 0.0, FREE, footprint=SQUARE)
+        world.add_robot(f'b{i}', (0.8 * i, 0.0, 0.0), 3.0, FREE, footprint=SQUARE)
+    assert sorted(name for name, _, _ in world.contacts('a5')) == ['a4', 'a6']
+    assert world.contacts('b5') == []
+    assert _ahead(world, 'a0') == pytest.approx(0.2, abs=1e-4)
+    assert _ahead(world, 'b0') == pytest.approx(0.6, abs=1e-4)
+    assert math.isinf(_ahead(world, 'a39'))
+    world.set_robot_pose('a5', (2.0, 0.0, 0.0), 3.0)
+    assert sorted(name for name, _, _ in world.contacts('a5')) == ['b2', 'b3']
+    assert [name for name, _, _ in world.contacts('a4')] == ['a3']
+    assert _ahead(world, 'a4') == pytest.approx(0.6, abs=1e-4)
+    assert _ahead(world, 'b2') == pytest.approx(0.2, abs=1e-4)
 
 
 def test_peer_robot_is_seen_up_to_its_height():

@@ -88,7 +88,8 @@ Floors are named heights. Together they split z into levels, and a robot
 collides with and sees only the entities whose extent reaches into the level it
 stands on.
 
-The world holds at most 32 robots and 32 levels.
+Each level steps in a Box2D world of its own, and the world takes any number of
+levels and robots.
 
 ## Services
 
