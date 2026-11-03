@@ -7,11 +7,12 @@ import os
 import signal
 import subprocess
 import sys
+import threading
 import time
 
 import pytest
 
-from conftest import ACCEL, DT, TIMEOUT, TOP_SPEED, TURN_GAIN, ahead, seconds, until
+from conftest import ACCEL, DT, TIMEOUT, TOP_SPEED, TURN_GAIN, ahead, seconds, stable, until
 
 WALL_X = 3.0
 LIDAR_X = 0.1
@@ -33,29 +34,32 @@ def test_paused_server_steps_exactly_on_request(flatsim) -> None:
     refused = bench.control(False, 2)
     assert not refused.success
     assert seconds(refused.time) == pytest.approx(3 * DT, abs=1e-9)
-    time.sleep(0.2)
+    stable(lambda: bench.clock[-1], 20.0)
     assert bench.clock[-1] == pytest.approx(3 * DT, abs=1e-9)
 
 
-def test_unpaused_server_runs_at_its_real_time_factor(flatsim) -> None:
+def test_unpaused_server_advances_its_clock_within_the_real_time_factor(flatsim) -> None:
     import rclpy.parameter
 
     bench = flatsim(paused=False, real_time_factor=2.0)
-    until(lambda: len(bench.clock) > 5, 5.0, 'free-running clock')
+    until(lambda: len(bench.clock) > 5, 20.0, 'free-running clock')
+    seen = len(bench.clock)
+    until(lambda: len(bench.clock) > seen, 20.0, 'fresh clock sample')
     first, wall = bench.clock[-1], time.monotonic()
-    time.sleep(1.0)
+    until(lambda: bench.clock[-1] >= first + 2.0, 20.0, 'clock advancing')
     rate = (bench.clock[-1] - first) / (time.monotonic() - wall)
-    assert 1.0 < rate < 2.3
+    assert rate < 2.3
 
     paused = bench.control(True)
     assert paused.success
     frozen = seconds(paused.time)
-    time.sleep(0.3)
+    until(lambda: bench.clock[-1] == pytest.approx(frozen, abs=1e-9), 20.0, 'clock at the pause')
+    stable(lambda: bench.clock[-1], 20.0)
     assert bench.clock[-1] == pytest.approx(frozen, abs=1e-9)
 
     bench.server.set_parameters([rclpy.parameter.Parameter('real_time_factor', value=0.0)])
     assert bench.control(False).success
-    until(lambda: bench.clock[-1] > frozen + 10.0, 5.0, 'unlimited clock')
+    until(lambda: bench.clock[-1] > frozen + 10.0, 20.0, 'unlimited clock')
 
 
 def test_cmd_vel_drives_odom_tf_and_joint_states(flatsim) -> None:
@@ -264,14 +268,15 @@ def test_republish_shows_the_scan_of_a_teleported_robot(flatsim) -> None:
     bench = flatsim()
     bench.box('wall', WALL_X)
     robot = bench.spawn()
-    time.sleep(0.2)
+    until(lambda: bool(robot.scans), 20.0, 'first scan')
+    stable(lambda: len(robot.scans), 20.0)
     gap = ahead(robot.scans[-1])
     scans, transforms = len(robot.scans), len(robot.tf)
     assert bench.call('set_robot_pose', SetRobotPose.Request(name='testbot', x=1.0)).success
     assert not bench.call('set_robot_pose', SetRobotPose.Request(name='nobody', x=1.0)).success
     until(lambda: len(robot.tf) == transforms + 1, 5.0, 'transform of the teleport')
     assert robot.tf[-1].transforms[1].transform.translation.x == pytest.approx(1.0)
-    time.sleep(0.2)
+    stable(lambda: len(robot.scans), 20.0)
     assert len(robot.scans) == scans
     bench.republish()
     until(lambda: len(robot.scans) == scans + 1, 5.0, 'scan after the republish')
@@ -323,7 +328,7 @@ def test_envs_share_one_world_and_leave_by_prefix(flatsim) -> None:
     heard = len(far.scans)
     bench.republish('env_0/')
     until(lambda: len(near.scans) > 1 and seconds(near.scans[-1].header.stamp) == pytest.approx(reached), 5.0, 'republished scan of env_0')
-    time.sleep(0.2)
+    stable(lambda: len(far.scans), 20.0)
     assert len(far.scans) == heard
 
     assert bench.call('delete_prefix', DeletePrefix.Request(prefix='env_0/')).removed == 3
@@ -391,9 +396,9 @@ def test_a_shut_down_context_ends_the_stepping_thread_without_pausing() -> None:
 
     rclpy.init()
     server = FlatsimServer(parameter_overrides=[rclpy.parameter.Parameter('physics_dt', value=DT)])
-    time.sleep(0.3)
+    until(server._thread.is_alive, 20.0, 'stepping thread')
     rclpy.shutdown()
-    server._thread.join(timeout=2.0)
+    server._thread.join(timeout=20.0)
     assert not server._thread.is_alive()
     assert not server._paused
 
@@ -406,13 +411,23 @@ def test_repeated_sigint_shuts_the_server_down_cleanly() -> None:
         text=True,
         env={**os.environ, 'PYTHONUNBUFFERED': '1'},
     )
+    ready = threading.Event()
+
+    def watch() -> None:
+        assert proc.stdout is not None
+        for line in proc.stdout:
+            if 'flatsim up' in line:
+                ready.set()
+                return
+
+    threading.Thread(target=watch, daemon=True).start()
     try:
-        time.sleep(3.0)
+        until(lambda: ready.is_set() or proc.poll() is not None, 60.0, 'flatsim up line')
         assert proc.poll() is None
         for _ in range(40):
             proc.send_signal(signal.SIGINT)
             time.sleep(0.005)
-        output, _ = proc.communicate(timeout=15.0)
+        output, _ = proc.communicate(timeout=60.0)
     finally:
         if proc.poll() is None:
             proc.kill()

@@ -27,6 +27,18 @@ def until(pred: Callable[[], bool], timeout: float, what: str) -> None:
         time.sleep(0.005)
 
 
+def stable(read: Callable[[], object], timeout: float, window: float = 0.5) -> None:
+    deadline = time.monotonic() + timeout
+    value, since = read(), time.monotonic()
+    while time.monotonic() - since < window:
+        if time.monotonic() >= deadline:
+            raise AssertionError(f'value still changing after {timeout}s')
+        time.sleep(0.01)
+        current = read()
+        if current != value:
+            value, since = current, time.monotonic()
+
+
 def seconds(stamp: typing.Any) -> float:
     return stamp.sec + stamp.nanosec * 1e-9
 
