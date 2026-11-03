@@ -4,6 +4,7 @@ src = ["flatsim"]
 extend-exclude = [
     "**/launch",
     "**/setup.py",
+    "**/*.md",
 ]
 
 [lint]
