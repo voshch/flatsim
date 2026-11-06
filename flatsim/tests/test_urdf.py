@@ -6,7 +6,7 @@ import math
 
 import pytest
 
-from flatsim.urdf import CameraBlock, LidarBlock, frame_offset, frame_rotation, movable_joints, sensor_block
+from flatsim.urdf import CameraBlock, LidarBlock, frame_offset, frame_rotation, mock_controlled_joints, movable_joints, published_joints, sensor_block
 
 URDF = """<?xml version="1.0"?>
 <robot name="probe">
@@ -227,3 +227,39 @@ def test_contact_block_and_missing_optional_fields():
 def test_sensor_without_a_referenced_block_is_missing():
     assert sensor_block(URDF, 'front_laser') is None
     assert sensor_block(URDF, 'unbound') is None
+
+
+ARM_URDF = """<?xml version="1.0"?>
+<robot name="arm_bot">
+  <link name="base_link"/><link name="wheel_l"/><link name="upper"/><link name="finger_a"/><link name="finger_b"/>
+  <joint name="wheel_left_joint" type="continuous"><parent link="base_link"/><child link="wheel_l"/></joint>
+  <joint name="arm_1_joint" type="revolute"><parent link="base_link"/><child link="upper"/></joint>
+  <joint name="finger_a_joint" type="prismatic"><parent link="upper"/><child link="finger_a"/></joint>
+  <joint name="finger_b_joint" type="prismatic">
+    <parent link="upper"/><child link="finger_b"/>
+    <mimic joint="finger_a_joint"/>
+  </joint>
+  <ros2_control name="arm_system" type="system">
+    <hardware><plugin>{plugin}</plugin></hardware>
+    <joint name="arm_1_joint"><command_interface name="position"/><state_interface name="position"/></joint>
+    <joint name="finger_a_joint"><command_interface name="position"/><state_interface name="position"/></joint>
+    <joint name="finger_b_joint" mimic="true"><state_interface name="position"/></joint>
+  </ros2_control>
+</robot>"""
+
+
+def test_mock_hardware_joints_are_left_to_the_broadcaster():
+    urdf = ARM_URDF.format(plugin='mock_components/GenericSystem')
+    assert mock_controlled_joints(urdf) == {'arm_1_joint', 'finger_a_joint', 'finger_b_joint'}
+    assert movable_joints(urdf) == ['wheel_left_joint', 'arm_1_joint', 'finger_a_joint']
+    assert published_joints(urdf) == ['wheel_left_joint']
+
+
+def test_other_hardware_leaves_every_movable_joint_to_the_server():
+    urdf = ARM_URDF.format(plugin='gz_ros2_control/GazeboSimSystem')
+    assert mock_controlled_joints(urdf) == set()
+    assert published_joints(urdf) == ['wheel_left_joint', 'arm_1_joint', 'finger_a_joint']
+
+
+def test_urdf_without_ros2_control_publishes_every_movable_joint():
+    assert published_joints(URDF) == movable_joints(URDF)

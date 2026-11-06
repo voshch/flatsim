@@ -134,7 +134,7 @@ depth.
 | `/flatsim/poses` | `flatsim_msgs/EntityPoses` | in, new poses of boxes and discs, unknown names ignored |
 | `<robot_namespace>/cmd_vel` | `geometry_msgs/Twist` | in, the body twist command |
 | `<robot_namespace>/odom` | `nav_msgs/Odometry` | out, every step |
-| `<robot_namespace>/joint_states` | `sensor_msgs/JointState` | out, every step, the movable joints of the URDF at zero |
+| `<robot_namespace>/joint_states` | `sensor_msgs/JointState` | out, every step, the movable joints of the URDF at zero except those of a mock ros2_control block |
 | `tf_topic` of the spawn request | `tf2_msgs/TFMessage` | out, every step: `world_frame` to odom (identity) and odom to base |
 | `topic` of each sensor | see below | out, at the sensor's update rate |
 
@@ -148,7 +148,7 @@ this repository:
   bounds and acceleration limit of the command, then the body response (gain,
   first-order lag, traction limit, turn pivot) and the command timeout. An
   axis with `low = high = 0` does not move, a zero gain does not either.
-- the URDF, read for its movable joints, the pose of every sensor frame in the
+- the URDF, read for its movable joints (every one is published at zero, but those listed in a `<ros2_control>` block whose hardware plugin is `mock_components/GenericSystem`, which the `joint_state_broadcaster` of that hardware publishes on the same topic), the pose of every sensor frame in the
   base frame, and the `<gazebo reference="..."><sensor>` blocks
 - the sensors, each a [`SensorSpec`](flatsim_msgs/msg/SensorSpec.msg):
 

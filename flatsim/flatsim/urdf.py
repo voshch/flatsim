@@ -12,6 +12,7 @@ LIDAR_TYPES = ('gpu_lidar', 'lidar', 'gpu_ray', 'ray')
 CAMERA_TYPES = ('camera', 'depth_camera', 'depth', 'rgbd_camera')
 
 _MOVABLE = ('revolute', 'continuous', 'prismatic')
+MOCK_HARDWARE = 'mock_components/GenericSystem'
 
 
 @attrs.frozen
@@ -106,6 +107,18 @@ def movable_joints(urdf_xml: str) -> list[str]:
     """Names of the joints robot_state_publisher needs a position for."""
     root = ET.fromstring(urdf_xml)
     return [joint.get('name', '') for joint in root.findall('joint') if joint.get('type') in _MOVABLE and joint.find('mimic') is None]
+
+
+def mock_controlled_joints(urdf_xml: str) -> set[str]:
+    """Names of the joints in `<ros2_control>` blocks backed by mock_components/GenericSystem."""
+    root = ET.fromstring(urdf_xml)
+    return {joint.get('name', '') for block in root.iter('ros2_control') if (plugin := block.findtext('hardware/plugin')) is not None and plugin.strip() == MOCK_HARDWARE for joint in block.findall('joint')}
+
+
+def published_joints(urdf_xml: str) -> list[str]:
+    """Movable joints the server publishes itself, those a mock ros2_control hardware tracks are left to its joint_state_broadcaster."""
+    controlled = mock_controlled_joints(urdf_xml)
+    return [name for name in movable_joints(urdf_xml) if name not in controlled]
 
 
 def _number(element: ET.Element, path: str, default: float) -> float:
