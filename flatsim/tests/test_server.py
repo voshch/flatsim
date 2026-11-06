@@ -281,7 +281,7 @@ def test_republish_shows_the_scan_of_a_teleported_robot(flatsim) -> None:
     bench.republish()
     until(lambda: len(robot.scans) == scans + 1, 5.0, 'scan after the republish')
     assert ahead(robot.scans[-1]) == pytest.approx(gap - 1.0, abs=1e-3)
-    assert robot.odom[-1].pose.pose.position.x == pytest.approx(1.0)
+    until(lambda: robot.odom[-1].pose.pose.position.x == pytest.approx(1.0), 5.0, 'odom after the republish')
 
 
 def test_levels_hide_the_entities_of_other_floors(flatsim) -> None:
@@ -297,7 +297,7 @@ def test_levels_hide_the_entities_of_other_floors(flatsim) -> None:
     assert bench.call('set_robot_pose', SetRobotPose.Request(name='testbot', z=3.0)).success
     bench.republish()
     until(lambda: ahead(robot.scans[-1]) == pytest.approx(2.0 - 0.05 - LIDAR_X, abs=1e-3), 5.0, 'scan on the upper floor')
-    assert robot.odom[-1].pose.pose.position.z == pytest.approx(3.0)
+    until(lambda: robot.odom[-1].pose.pose.position.z == pytest.approx(3.0), 5.0, 'odom on the upper floor')
 
     assert list(bench.call('delete_entities', DeleteEntities.Request(names=['ground', 'ground'])).removed) == [True, False]
     assert bench.call('set_robot_pose', SetRobotPose.Request(name='testbot', z=0.0)).success
