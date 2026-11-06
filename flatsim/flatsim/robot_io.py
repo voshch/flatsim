@@ -18,7 +18,7 @@ import tf2_msgs.msg
 
 from flatsim.drive import Axis, DriveModel
 from flatsim.sensors import RayPlan, camera_cloud, camera_grid, camera_reach, fan, imu_acceleration, lidar_cloud, ray_plan, ring_slopes, scan_ranges
-from flatsim.urdf import frame_offset, frame_rotation, movable_joints, sensor_block
+from flatsim.urdf import frame_offset, frame_rotation, published_joints, sensor_block
 from flatsim.world import RobotState, ScanSpec, Touch, Twist2D
 from flatsim_msgs.msg import DriveModel as DriveModelMsg
 from flatsim_msgs.msg import SensorSpec
@@ -373,7 +373,7 @@ def open_robot(node: rclpy.node.Node, request: SpawnRobot.Request, dt: float, on
             world_frame=request.world_frame or DEFAULT_WORLD_FRAME,
             odom_frame=request.frame_prefix + request.odom_frame,
             base_frame=request.frame_prefix + request.base_frame,
-            joints=movable_joints(request.urdf) if request.urdf else [],
+            joints=published_joints(request.urdf) if request.urdf else [],
             tf=opener.publisher(tf2_msgs.msg.TFMessage, request.tf_topic or DEFAULT_TF_TOPIC, _TF_QUEUE),
             odom=opener.publisher(nav_msgs.msg.Odometry, f'{namespace}/odom'),
             joint_states=opener.publisher(sensor_msgs.msg.JointState, f'{namespace}/joint_states'),
