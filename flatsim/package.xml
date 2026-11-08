@@ -6,6 +6,7 @@
   <maintainer email="dev@voshch.dev">voshch</maintainer>
   <license>MIT</license>
 
+  <exec_depend>arena_rclpy_mixins</exec_depend>
   <exec_depend>builtin_interfaces</exec_depend>
   <exec_depend>flatsim_msgs</exec_depend>
   <exec_depend>geometry_msgs</exec_depend>

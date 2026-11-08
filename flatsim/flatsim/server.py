@@ -7,17 +7,16 @@ import signal
 import threading
 import time
 import traceback
-import typing
 from collections.abc import Iterator
 
 import builtin_interfaces.msg
-import rcl_interfaces.msg
 import rclpy
 import rclpy.executors
 import rclpy.node
 import rclpy.parameter
 import rclpy.qos
 import rosgraph_msgs.msg
+from arena_rclpy_mixins.params import Param, Range, declare
 
 from flatsim.physics import Physics
 from flatsim.scene import Scene
@@ -92,21 +91,12 @@ class FlatsimServer(rclpy.node.Node):
 
     def __init__(self, *, parameter_overrides: list[rclpy.parameter.Parameter] | None = None) -> None:
         super().__init__(NODE_NAME, parameter_overrides=parameter_overrides)
-        fixed = rcl_interfaces.msg.ParameterDescriptor(read_only=True)
-        self._dt = float(typing.cast(float, self.declare_parameter('physics_dt', DEFAULT_DT, fixed).value))
-        if self._dt <= 0.0:
-            raise ValueError(f'physics_dt must be positive, got {self._dt}')
-        dynamics = str(self.declare_parameter('dynamics', Dynamics.RIGID.value, fixed).value)
-        physics = str(self.declare_parameter('physics', Physics.AUTO.value, fixed).value)
-        if physics not in {choice.value for choice in Physics}:
-            raise ValueError(f'physics must be one of {[choice.value for choice in Physics]}, got {physics!r}')
-        try:
-            self._scene = Scene(self._dt, Dynamics(dynamics), Physics(physics))
-        except ValueError as e:
-            raise ValueError(f'dynamics must be one of {[choice.value for choice in Dynamics]}, got {dynamics!r}') from e
-        self._paused = bool(self.declare_parameter('paused', False, fixed).value)
-        self._real_time_factor = float(typing.cast(float, self.declare_parameter('real_time_factor', 1.0).value))
-        self.add_on_set_parameters_callback(self._on_parameters)
+        self._dt = declare(self, Param[float]('physics_dt', DEFAULT_DT, 'Physics step in sim seconds.', constraint=Range(lo=0.0, lo_open=True), read_only=True)).value
+        dynamics = declare(self, Param[Dynamics]('dynamics', Dynamics.RIGID, 'Rigid: walls and obstacles stop or push a robot, kinematic: it passes through.', read_only=True)).value
+        physics = declare(self, Param[Physics]('physics', Physics.AUTO, 'Physics engine, auto = warp when a CUDA device is visible, else box2d.', read_only=True)).value
+        self._scene = Scene(self._dt, dynamics, physics)
+        self._paused = declare(self, Param[bool]('paused', False, 'Start paused, stepping only on request.', read_only=True)).value
+        self._real_time_factor = declare(self, Param[float]('real_time_factor', 1.0, 'Sim seconds per wall second while unpaused (0 = as fast as it can).', constraint=Range(lo=0.0)))
 
         self._ticks = 0
         self._turns = _Turns()
@@ -128,17 +118,11 @@ class FlatsimServer(rclpy.node.Node):
 
         self._thread = threading.Thread(target=self._run, name='flatsim_steps', daemon=True)
         self._thread.start()
-        self.get_logger().info(f'flatsim up: {type(self._scene.world).__name__}, dt {self._dt}, {dynamics}, real_time_factor {self._real_time_factor:g}, {"paused" if self._paused else "running"}')
+        self.get_logger().info(f'flatsim up: {type(self._scene.world).__name__}, dt {self._dt}, {dynamics.value}, real_time_factor {self._real_time_factor.value:g}, {"paused" if self._paused else "running"}')
 
     @property
     def now(self) -> float:
         return self._ticks * self._dt
-
-    def _on_parameters(self, parameters: list[rclpy.parameter.Parameter]) -> rcl_interfaces.msg.SetParametersResult:
-        for parameter in parameters:
-            if parameter.name == 'real_time_factor':
-                self._real_time_factor = float(typing.cast(float, parameter.value))
-        return rcl_interfaces.msg.SetParametersResult(successful=True)
 
     def _advance(self, steps: int) -> None:
         """Take `steps` physics steps, each followed by its clock message, the caller holds the world lock."""
@@ -166,7 +150,7 @@ class FlatsimServer(rclpy.node.Node):
                 self._paused = True
                 continue
             if running:
-                delay = pace.wait(self._dt, self._real_time_factor)
+                delay = pace.wait(self._dt, self._real_time_factor.value)
                 if delay > 0.0:
                     self._stop.wait(delay)
             else:
