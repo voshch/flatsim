@@ -92,8 +92,8 @@ class FlatsimServer(rclpy.node.Node):
     def __init__(self, *, parameter_overrides: list[rclpy.parameter.Parameter] | None = None) -> None:
         super().__init__(NODE_NAME, parameter_overrides=parameter_overrides)
         self._dt = declare(self, Param[float]('physics_dt', DEFAULT_DT, 'Physics step in sim seconds.', constraint=Range(lo=0.0, lo_open=True), read_only=True)).value
-        dynamics = declare(self, Param[Dynamics]('dynamics', Dynamics.RIGID, 'Rigid: walls and obstacles stop or push a robot, kinematic: it passes through.', read_only=True)).value
-        physics = declare(self, Param[Physics]('physics', Physics.AUTO, 'Physics engine, auto = warp when a CUDA device is visible, else box2d.', read_only=True)).value
+        dynamics = declare(self, Param[Dynamics]('dynamics', Dynamics.RIGID, 'How walls and obstacles act on a robot.', read_only=True)).value
+        physics = declare(self, Param[Physics]('physics', Physics.AUTO, 'Physics engine of the server.', read_only=True)).value
         self._scene = Scene(self._dt, dynamics, physics)
         self._paused = declare(self, Param[bool]('paused', False, 'Start paused, stepping only on request.', read_only=True)).value
         self._real_time_factor = declare(self, Param[float]('real_time_factor', 1.0, 'Sim seconds per wall second while unpaused (0 = as fast as it can).', constraint=Range(lo=0.0)))
