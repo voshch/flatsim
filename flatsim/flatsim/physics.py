@@ -2,21 +2,15 @@
 
 from __future__ import annotations
 
-import enum
 import typing
 
-from flatsim.world import Dynamics, FlatWorld
+from flatsim.params import Dynamics, Physics
+from flatsim.world import FlatWorld
 
 if typing.TYPE_CHECKING:
     from flatsim.warp_world import WarpWorld
 
     World = FlatWorld | WarpWorld
-
-
-class Physics(enum.Enum):
-    AUTO = 'auto'
-    BOX2D = 'box2d'
-    WARP = 'warp'
 
 
 def resolve(physics: Physics) -> Physics:

@@ -10,8 +10,10 @@ import numpy as np
 import pytest
 
 from flatsim.drive import Axis, DriveModel
-from flatsim.physics import Physics, make_world, resolve
-from flatsim.world import Dynamics, ScanSpec
+from flatsim.params import Physics
+from flatsim.physics import make_world, resolve
+from flatsim.params import Dynamics
+from flatsim.world import ScanSpec
 
 if typing.TYPE_CHECKING:
     from collections.abc import Callable
