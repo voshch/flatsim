@@ -5,9 +5,10 @@ from __future__ import annotations
 import typing
 from collections.abc import Callable, Collection
 
-from flatsim.physics import Physics, make_world
+from flatsim.params import Dynamics, Physics
+from flatsim.physics import make_world
 from flatsim.robot_io import RobotIO, open_robot
-from flatsim.world import Dynamics, Twist2D
+from flatsim.world import Twist2D
 
 if typing.TYPE_CHECKING:
     import builtin_interfaces.msg

@@ -16,16 +16,15 @@ import rclpy.node
 import rclpy.parameter
 import rclpy.qos
 import rosgraph_msgs.msg
-from arena_rclpy_mixins.params import Param, Range, declare
+from arena_rclpy_mixins.params import declare
 
-from flatsim.physics import Physics
+from flatsim.params import DYNAMICS, PAUSED, PHYSICS, PHYSICS_DT, REAL_TIME_FACTOR
 from flatsim.scene import Scene
-from flatsim.world import Dynamics, Twist2D
+from flatsim.world import Twist2D
 from flatsim_msgs.msg import Discs, EntityPoses
 from flatsim_msgs.srv import AddFloors, AddOutlines, ControlWorld, DeleteEntities, DeletePrefix, DeleteRobot, Republish, SetRobotPose, SpawnBoxes, SpawnRobot
 
 NODE_NAME = 'flatsim'
-DEFAULT_DT = 0.0333
 IDLE_CLOCK_PERIOD = 0.01
 
 _TOPIC_QUEUE = 100
@@ -91,12 +90,12 @@ class FlatsimServer(rclpy.node.Node):
 
     def __init__(self, *, parameter_overrides: list[rclpy.parameter.Parameter] | None = None) -> None:
         super().__init__(NODE_NAME, parameter_overrides=parameter_overrides)
-        self._dt = declare(self, Param[float]('physics_dt', DEFAULT_DT, 'Physics step in sim seconds.', constraint=Range(lo=0.0, lo_open=True), read_only=True)).value
-        dynamics = declare(self, Param[Dynamics]('dynamics', Dynamics.RIGID, 'How walls and obstacles act on a robot.', read_only=True)).value
-        physics = declare(self, Param[Physics]('physics', Physics.AUTO, 'Physics engine of the server.', read_only=True)).value
+        self._dt = declare(self, PHYSICS_DT).value
+        dynamics = declare(self, DYNAMICS).value
+        physics = declare(self, PHYSICS).value
         self._scene = Scene(self._dt, dynamics, physics)
-        self._paused = declare(self, Param[bool]('paused', False, 'Start paused, stepping only on request.', read_only=True)).value
-        self._real_time_factor = declare(self, Param[float]('real_time_factor', 1.0, 'Sim seconds per wall second while unpaused (0 = as fast as it can).', constraint=Range(lo=0.0)))
+        self._paused = declare(self, PAUSED).value
+        self._real_time_factor = declare(self, REAL_TIME_FACTOR)
 
         self._ticks = 0
         self._turns = _Turns()

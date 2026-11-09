@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import bisect
-import enum
 import math
 from collections.abc import Iterable, Sequence
 
@@ -12,6 +11,7 @@ import numpy as np
 import pyb2d3 as b2
 
 from flatsim.drive import DriveModel
+from flatsim.params import Dynamics
 
 Point = tuple[float, float]
 Pose2D = tuple[float, float, float]
@@ -33,11 +33,6 @@ _MAX_HULL = 8
 _CONTACT_MARGIN = 0.01
 _ARC_EPS = 1e-9
 _BOX_EDGES = [1, 2, 3, 0]
-
-
-class Dynamics(enum.Enum):
-    RIGID = 'rigid'
-    KINEMATIC = 'kinematic'
 
 
 @attrs.frozen

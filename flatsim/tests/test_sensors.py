@@ -10,7 +10,8 @@ import pytest
 from flatsim.drive import Axis, DriveModel
 from flatsim.sensors import CAMERA_POINT, GRAVITY, LIDAR_POINT, MAX_CAMERA_COLUMNS, MAX_CAMERA_ROWS, RayPlan, camera_cloud, camera_grid, camera_reach, fan, imu_acceleration, lidar_cloud, ray_plan, ring_slopes, scan_ranges
 from flatsim.urdf import frame_rotation
-from flatsim.world import Dynamics, FlatWorld, ScanSpec
+from flatsim.params import Dynamics
+from flatsim.world import FlatWorld, ScanSpec
 
 DT = 1.0 / 30.0
 FREE = DriveModel(linear=Axis(-1.0, 1.0), lateral=Axis(0.0, 0.0), angular=Axis(-2.0, 2.0))
