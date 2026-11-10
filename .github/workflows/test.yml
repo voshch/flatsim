@@ -15,6 +15,12 @@ jobs:
         with:
           path: src/flatsim
 
+      - uses: actions/checkout@v4
+        with:
+          repository: voshch/arena-rclpy-mixins
+          ref: 7d51ab50e4475ca8abf9618e2228d6499c6793ea
+          path: src/arena_rclpy_mixins
+
       - name: Install dependencies
         run: |
           apt-get update
