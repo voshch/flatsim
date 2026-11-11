@@ -47,6 +47,42 @@ def ahead(scan: typing.Any) -> float:
     return scan.ranges[round(-scan.angle_min / scan.angle_increment)]
 
 
+def robot_request(name: str, x: float = 0.0, y: float = 0.0, z: float = 0.0, yaw: float = 0.0) -> typing.Any:
+    """The spawn request of a testbot called `name`."""
+    from flatsim_msgs.msg import Axis, DriveModel, Fan, SensorSpec
+    from flatsim_msgs.srv import SpawnRobot
+
+    namespace = f'/{name}'
+    tf_topic = f'{namespace}/tf'
+
+    def sensor(sname: str, kind: str, frame: str, backing: str = '', fan: list[Fan] | None = None) -> SensorSpec:
+        return SensorSpec(name=sname, type=kind, topic=f'{namespace}/{sname}', frame=frame, sensor=backing, fan=fan or [])
+
+    request = SpawnRobot.Request(name=name, robot_namespace=namespace, tf_topic=tf_topic, frame_prefix=f'{name}/', odom_frame='odom', base_frame='base_link')
+    request.x, request.y, request.z, request.yaw = x, y, z, yaw
+    request.radius = 0.2
+    request.drive = DriveModel(
+        linear=Axis(low=-TOP_SPEED, high=TOP_SPEED, accel=ACCEL),
+        lateral=Axis(low=0.0, high=0.0, accel=math.inf),
+        angular=Axis(low=-2.0, high=2.0, accel=math.inf),
+        gain=[1.0, 1.0, TURN_GAIN],
+        lag=0.0,
+        traction=math.inf,
+        pivot=0.0,
+        timeout=TIMEOUT,
+    )
+    request.urdf = URDF
+    request.sensors = [
+        sensor('scan', SensorSpec.LASERSCAN, 'lidar_link', 'lidar'),
+        sensor('points', SensorSpec.POINTCLOUD, 'lidar_link', 'lidar'),
+        sensor('depth_points', SensorSpec.POINTCLOUD, 'camera_link', 'depth'),
+        sensor('imu', SensorSpec.IMU, 'imu_link', 'imu'),
+        sensor('rear_scan', SensorSpec.LASERSCAN, 'rear_link', fan=[Fan(angle_min=-1.0, angle_increment=0.02, beams=101, range_max=8.0, update_rate=0.0)]),
+        sensor('bumper', SensorSpec.CONTACT, 'base_link'),
+    ]
+    return request
+
+
 class Robot:
     """Everything the probe hears from one spawned testbot."""
 
@@ -86,35 +122,7 @@ class Robot:
         self.cmd_vel = probe.create_publisher(geometry_msgs.msg.Twist, f'{self.namespace}/cmd_vel', 10)
 
     def request(self, x: float = 0.0, y: float = 0.0, z: float = 0.0, yaw: float = 0.0) -> typing.Any:
-        from flatsim_msgs.msg import Axis, DriveModel, Fan, SensorSpec
-        from flatsim_msgs.srv import SpawnRobot
-
-        def sensor(name: str, kind: str, frame: str, backing: str = '', fan: list[Fan] | None = None) -> SensorSpec:
-            return SensorSpec(name=name, type=kind, topic=f'{self.namespace}/{name}', frame=frame, sensor=backing, fan=fan or [])
-
-        request = SpawnRobot.Request(name=self.name, robot_namespace=self.namespace, tf_topic=self.tf_topic, frame_prefix=self.prefix, odom_frame='odom', base_frame='base_link')
-        request.x, request.y, request.z, request.yaw = x, y, z, yaw
-        request.radius = 0.2
-        request.drive = DriveModel(
-            linear=Axis(low=-TOP_SPEED, high=TOP_SPEED, accel=ACCEL),
-            lateral=Axis(low=0.0, high=0.0, accel=math.inf),
-            angular=Axis(low=-2.0, high=2.0, accel=math.inf),
-            gain=[1.0, 1.0, TURN_GAIN],
-            lag=0.0,
-            traction=math.inf,
-            pivot=0.0,
-            timeout=TIMEOUT,
-        )
-        request.urdf = URDF
-        request.sensors = [
-            sensor('scan', SensorSpec.LASERSCAN, 'lidar_link', 'lidar'),
-            sensor('points', SensorSpec.POINTCLOUD, 'lidar_link', 'lidar'),
-            sensor('depth_points', SensorSpec.POINTCLOUD, 'camera_link', 'depth'),
-            sensor('imu', SensorSpec.IMU, 'imu_link', 'imu'),
-            sensor('rear_scan', SensorSpec.LASERSCAN, 'rear_link', fan=[Fan(angle_min=-1.0, angle_increment=0.02, beams=101, range_max=8.0, update_rate=0.0)]),
-            sensor('bumper', SensorSpec.CONTACT, 'base_link'),
-        ]
-        return request
+        return robot_request(self.name, x, y, z, yaw)
 
     def stamp(self) -> float:
         return seconds(self.odom[-1].header.stamp) if self.odom else -math.inf
@@ -157,6 +165,42 @@ class Bench:
         self.clients = {name: probe.create_client(service, f'/flatsim/{name}', qos_profile=queue) for name, service in services.items()}
         for client in self.clients.values():
             assert client.wait_for_service(timeout_sec=10.0), client.srv_name
+        self.warm()
+
+    def warm(self) -> None:
+        """Answer a harmless request on every service, so the first real call does not meet a reply the server dropped before matching this client."""
+        from flatsim_msgs.srv import AddFloors, AddOutlines, ControlWorld, DeleteEntities, DeletePrefix, DeleteRobot, Republish, SetRobotPose, SpawnBoxes
+
+        probes = {
+            'control_world': ControlWorld.Request(pause=False, multi_step=1),
+            'add_floors': AddFloors.Request(),
+            'add_outlines': AddOutlines.Request(),
+            'spawn_boxes': SpawnBoxes.Request(),
+            'delete_entities': DeleteEntities.Request(),
+            'delete_prefix': DeletePrefix.Request(prefix='warmup-none'),
+            'set_robot_pose': SetRobotPose.Request(name='warmup-none'),
+            'delete_robot': DeleteRobot.Request(name='warmup-none'),
+            'republish': Republish.Request(prefix='warmup-none'),
+            'spawn_robot': robot_request('warmup'),
+        }
+        for name, request in probes.items():
+            for _ in range(15):
+                future = self.clients[name].call_async(request)
+                if self.answered(future, 2.0):
+                    break
+            else:
+                raise AssertionError(f'{name} did not answer a warm-up request')
+        self.call('delete_robot', DeleteRobot.Request(name='warmup'))
+
+    @staticmethod
+    def answered(future: typing.Any, timeout: float) -> bool:
+        deadline = time.monotonic() + timeout
+        while not future.done():
+            if time.monotonic() >= deadline:
+                future.cancel()
+                return False
+            time.sleep(0.01)
+        return True
 
     def call(self, service: str, request: typing.Any) -> typing.Any:
         future = self.clients[service].call_async(request)
