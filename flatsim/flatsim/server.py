@@ -15,6 +15,7 @@ import rclpy.executors
 import rclpy.node
 import rclpy.parameter
 import rclpy.qos
+import rclpy.signals
 import rosgraph_msgs.msg
 from arena_rclpy_mixins.params import declare
 
@@ -249,16 +250,28 @@ class FlatsimServer(rclpy.node.Node):
         super().destroy_node()
 
 
+def _interrupt_once(signum: int, frame: object) -> None:
+    signal.signal(signal.SIGINT, signal.SIG_IGN)
+    raise KeyboardInterrupt
+
+
 def main() -> None:
+    signal.signal(signal.SIGINT, _interrupt_once)
     rclpy.init()
-    node = FlatsimServer()
+    executor = rclpy.executors.SingleThreadedExecutor()
+    node = None
     try:
-        rclpy.spin(node)
+        node = FlatsimServer()
+        executor.add_node(node)
+        executor.spin()
     except (KeyboardInterrupt, rclpy.executors.ExternalShutdownException):
         pass
     finally:
         signal.signal(signal.SIGINT, signal.SIG_IGN)
-        node.destroy_node()
+        rclpy.signals.uninstall_signal_handlers()
+        executor.shutdown()
+        if node is not None:
+            node.destroy_node()
         rclpy.try_shutdown()
 
 
