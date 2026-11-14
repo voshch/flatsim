@@ -14,7 +14,7 @@ flatsim/                     this repository
 |   |   |-- world.py         FlatWorld: bodies, outlines, boxes, discs, levels, stepping, batched ray casts, contacts
 |   |   |-- warp_world.py    WarpWorld: the same API with bodies, contacts and ray casts on a Warp device
 |   |   |-- physics.py       the engine choice, make_world
-|   |   |-- drive.py         DriveModel: per-axis velocity and acceleration limits, gain, lag, traction, pivot
+|   |   |-- drive.py         DriveModel: per-axis velocity and acceleration limits, gain, lag, traction, pivot, turning radius
 |   |   |-- sensors.py       beam fans, lidar and depth camera point clouds, IMU acceleration
 |   |   |-- urdf.py          link offsets, movable joints and gazebo sensor blocks read from a URDF string
 |   |   |-- robot_io.py      topics of one robot: odom, tf, joint states, sensors and their schedule
@@ -147,7 +147,9 @@ this repository:
 - the [`DriveModel`](flatsim_msgs/msg/DriveModel.msg): per axis the velocity
   bounds and acceleration limit of the command, then the body response (gain,
   first-order lag, traction limit, turn pivot) and the command timeout. An
-  axis with `low = high = 0` does not move, a zero gain does not either.
+  axis with `low = high = 0` does not move, a zero gain does not either. A
+  `min_turning_radius` above 0 makes the body car-like: its turn rate never
+  exceeds its forward speed over that radius, so it cannot turn in place.
 - the URDF, read for its movable joints (every one is published at zero, but those listed in a `<ros2_control>` block whose hardware plugin is `mock_components/GenericSystem`, which the `joint_state_broadcaster` of that hardware publishes on the same topic), the pose of every sensor frame in the
   base frame, and the `<gazebo reference="..."><sensor>` blocks
 - the sensors, each a [`SensorSpec`](flatsim_msgs/msg/SensorSpec.msg):

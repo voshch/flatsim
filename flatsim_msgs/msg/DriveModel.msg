@@ -6,3 +6,4 @@ float64 lag        # first-order response time, s, 0 = immediate
 float64 traction   # planar acceleration limit, m/s^2, inf = unbounded
 float64 pivot      # forward offset of the turn center from the base, m
 float64 timeout    # sim seconds a command stays in force
+float64 min_turning_radius  # tightest turn radius, m, 0 = turns in place

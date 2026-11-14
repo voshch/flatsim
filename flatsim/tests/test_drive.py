@@ -1,4 +1,4 @@
-"""DriveModel: command limits, traction, gain, pivot and lag."""
+"""DriveModel: command limits, traction, gain, pivot, lag and turning radius."""
 
 import math
 
@@ -47,3 +47,24 @@ def test_follow_with_a_lag_reaches_the_time_constant_point_after_one_lag():
     for _ in range(100):
         twist = model.follow(twist, (0.5, 0.2, 1.0), dt)
     assert twist == pytest.approx((0.5 * (1 - math.exp(-1)), 0.2 * (1 - math.exp(-1)), 1 - math.exp(-1)))
+
+
+def test_follow_caps_the_turn_rate_at_forward_speed_over_the_turning_radius():
+    model = DriveModel(min_turning_radius=0.5)
+    assert model.follow((0.0, 0.0, 0.0), (1.0, 0.0, 5.0), 0.1) == pytest.approx((1.0, 0.0, 2.0))
+    assert model.follow((0.0, 0.0, 0.0), (-1.0, 0.0, -5.0), 0.1) == pytest.approx((-1.0, 0.0, -2.0))
+    assert model.follow((0.0, 0.0, 0.0), (1.0, 0.0, 1.5), 0.1) == pytest.approx((1.0, 0.0, 1.5))
+
+
+def test_follow_with_a_turning_radius_does_not_turn_in_place():
+    model = DriveModel(min_turning_radius=0.5)
+    assert model.follow((0.0, 0.0, 0.0), (0.0, 0.0, 3.0), 0.1) == (0.0, 0.0, 0.0)
+
+
+def test_follow_caps_the_turn_rate_at_the_speed_traction_allows():
+    model = DriveModel(traction=2.0, min_turning_radius=0.5)
+    assert model.follow((0.0, 0.0, 0.0), (1.0, 0.0, 5.0), 0.1) == pytest.approx((0.2, 0.0, 0.4))
+
+
+def test_follow_without_a_turning_radius_turns_in_place():
+    assert DriveModel().follow((0.0, 0.0, 0.0), (0.0, 0.0, 3.0), 0.1) == (0.0, 0.0, 3.0)

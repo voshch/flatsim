@@ -42,5 +42,6 @@ def test_drive_model_message_keeps_every_field() -> None:
         traction=7.85,
         pivot=0.131,
         timeout=0.25,
+        min_turning_radius=0.74,
     )
-    assert drive_model(msg) == DriveModel(Axis(-2.0, 2.0, 20.0), Axis(0.0, 0.0), Axis(-4.0, 4.0, 25.0), (1.0, 1.0, 1.36), 0.1, 7.85, 0.131, 0.25)
+    assert drive_model(msg) == DriveModel(Axis(-2.0, 2.0, 20.0), Axis(0.0, 0.0), Axis(-4.0, 4.0, 25.0), (1.0, 1.0, 1.36), 0.1, 7.85, 0.131, 0.25, 0.74)

@@ -1069,7 +1069,7 @@ def _slew(current: np.ndarray, target: np.ndarray, step: np.ndarray) -> np.ndarr
     return np.where(np.isfinite(step), current + np.clip(target - current, -step, step), target)
 
 
-def _follow(twist: np.ndarray, setpoint: np.ndarray, gain: np.ndarray, lag: np.ndarray, traction: np.ndarray, pivot: np.ndarray, dt: float) -> np.ndarray:
+def _follow(twist: np.ndarray, setpoint: np.ndarray, gain: np.ndarray, lag: np.ndarray, traction: np.ndarray, pivot: np.ndarray, min_turning_radius: np.ndarray, dt: float) -> np.ndarray:
     """`DriveModel.follow` over rows of robots."""
     turn = setpoint[:, 2] * gain[:, 2]
     target = np.stack([setpoint[:, 0] * gain[:, 0], setpoint[:, 1] * gain[:, 1] - pivot * turn, turn], axis=1)
@@ -1080,7 +1080,11 @@ def _follow(twist: np.ndarray, setpoint: np.ndarray, gain: np.ndarray, lag: np.n
     change = np.hypot(delta[:, 0], delta[:, 1])
     moving = change > 0.0
     scale = np.where(moving, np.minimum(1.0, traction * dt / np.where(moving, change, 1.0)), 0.0)
-    return np.column_stack([twist[:, :2] + delta * scale[:, None], target[:, 2]])
+    planar = twist[:, :2] + delta * scale[:, None]
+    steered = min_turning_radius > 0.0
+    limit = np.abs(planar[:, 0]) / np.where(steered, min_turning_radius, 1.0)
+    turn = np.where(steered, np.clip(target[:, 2], -limit, limit), target[:, 2])
+    return np.column_stack([planar[:, 0], planar[:, 1] + pivot * (target[:, 2] - turn), turn])
 
 
 class WarpWorld:
@@ -1492,6 +1496,7 @@ class WarpWorld:
                 'traction': np.array([drive.traction for drive in drives]),
                 'pivot': np.array([drive.pivot for drive in drives]),
                 'timeout': np.array([drive.timeout for drive in drives]),
+                'min_turning_radius': np.array([drive.min_turning_radius for drive in drives]),
             }
             pad = np.zeros((count, MAX_VERTS, 2))
             sides = np.zeros(count, dtype=np.int64)
@@ -1532,7 +1537,7 @@ class WarpWorld:
         cos, sin = rot[:, 0], rot[:, 1]
         command = np.where((self.time - state['command_time'] <= drive['timeout'][:, None]), state['command'], 0.0)
         state['setpoint'] = _slew(state['setpoint'], np.clip(command, drive['low'], drive['high']), drive['accel'] * dt)
-        twist = _follow(before, state['setpoint'], drive['gain'], drive['lag'], drive['traction'], drive['pivot'], dt)
+        twist = _follow(before, state['setpoint'], drive['gain'], drive['lag'], drive['traction'], drive['pivot'], drive['min_turning_radius'], dt)
         state['vel'] = np.stack([cos * twist[:, 0] - sin * twist[:, 1], sin * twist[:, 0] + cos * twist[:, 1]], axis=1)
         limit = MAX_ROTATION / dt
         state['spin'] = np.clip(twist[:, 2:], -limit, limit)
