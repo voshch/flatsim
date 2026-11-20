@@ -389,6 +389,21 @@ def test_spin_is_capped_alike():
     assert warp[-1, 5] == pytest.approx(box2d[-1, 5], abs=1e-2)
 
 
+def test_car_like_robot_keeps_its_turning_radius_alike():
+    car = DriveModel(linear=Axis(-1.0, 1.0, 2.0), lateral=Axis(0.0, 0.0), angular=Axis(-4.0, 4.0), min_turning_radius=0.75)
+
+    def scene(world: World) -> np.ndarray:
+        world.add_robot('robot', (0.0, 0.0, 0.0), 0.0, car, radius=0.25)
+        return _drive(world, [(0.5, {'robot': (0.0, 0.0, 3.0)}), (2.0, {'robot': (1.0, 0.0, 3.0)}), (1.0, {'robot': (-0.5, 0.0, -3.0)})])
+
+    box2d, warp = _both(scene)
+    assert np.abs(warp[:, :3] - box2d[:, :3]).max() < 1e-3
+    for run in (box2d, warp):
+        assert np.abs(run[: round(0.5 / DT), 5]).max() < 1e-6
+        assert (np.abs(run[:, 5]) <= np.abs(run[:, 3]) / 0.75 + 1e-3).all()
+        assert run[round(2.5 / DT) - 1, 5] == pytest.approx(1.0 / 0.75, abs=1e-3)
+
+
 def test_wall_stops_the_robot_alike_at_a_long_step():
     slow = 0.05
 

@@ -68,6 +68,7 @@ def drive_model(msg: DriveModelMsg) -> DriveModel:
         traction=msg.traction,
         pivot=msg.pivot,
         timeout=msg.timeout,
+        min_turning_radius=msg.min_turning_radius,
     )
 
 

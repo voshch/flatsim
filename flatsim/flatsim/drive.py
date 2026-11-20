@@ -1,4 +1,4 @@
-"""Drive response of one planar robot body: command limiter, lag, traction and turning pivot."""
+"""Drive response of one planar robot body: command limiter, lag, traction, turning pivot and turning radius."""
 
 from __future__ import annotations
 
@@ -38,6 +38,7 @@ class DriveModel:
     traction: float = math.inf
     pivot: float = 0.0
     timeout: float = DEFAULT_TIMEOUT
+    min_turning_radius: float = 0.0  # 0 = turns in place
 
     def setpoint(self, current: Twist2D, command: Twist2D, dt: float) -> Twist2D:
         """Command after velocity clipping and acceleration limiting."""
@@ -48,7 +49,7 @@ class DriveModel:
         )
 
     def follow(self, twist: Twist2D, setpoint: Twist2D, dt: float) -> Twist2D:
-        """Body twist at the base origin one step later, turning about the pivot, lagging by `lag`, the planar change capped by traction."""
+        """Body twist at the base origin one step later, after pivot, lag, traction and turning radius."""
         turn = setpoint[2] * self.gain[2]
         target = (setpoint[0] * self.gain[0], setpoint[1] * self.gain[1] - self.pivot * turn, turn)
         if self.lag > 0.0:
@@ -57,7 +58,13 @@ class DriveModel:
         dvx, dvy = target[0] - twist[0], target[1] - twist[1]
         change = math.hypot(dvx, dvy)
         scale = min(1.0, self.traction * dt / change) if change > 0.0 else 0.0
-        return (twist[0] + dvx * scale, twist[1] + dvy * scale, target[2])
+        vx, vy, wz = twist[0] + dvx * scale, twist[1] + dvy * scale, target[2]
+        if self.min_turning_radius > 0.0:
+            limit = abs(vx) / self.min_turning_radius
+            capped = min(max(wz, -limit), limit)
+            vy += self.pivot * (wz - capped)
+            wz = capped
+        return (vx, vy, wz)
 
     def encoded(self, twist: Twist2D) -> Twist2D:
         """Setpoint a steady body twist answers to, the twist wheel odometry reads."""
