@@ -4,7 +4,7 @@ version = "0.1.0"
 dependencies = [
     "attrs",
     "numpy",
-    "pyb2d3",
+    "pyb2d3>=0.11,<0.12",
     "warp-lang",
 ]
 dynamic = ["description", "license", "maintainers", "scripts"]

@@ -51,7 +51,7 @@ test = [
 requires-dist = [
     { name = "attrs" },
     { name = "numpy" },
-    { name = "pyb2d3" },
+    { name = "pyb2d3", specifier = ">=0.11,<0.12" },
     { name = "pytest", marker = "extra == 'test'", specifier = ">=7" },
     { name = "warp-lang" },
 ]
